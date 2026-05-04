@@ -1306,28 +1306,4 @@ function registerMessageRoutes(app, deps) {
   });
 }
 
-  /* 🔥 BirdX Public File Download */
-  app.get("/api/file/:name", (req, res) => {
-    try {
-      const fileName = String(req.params.name || "").trim();
-
-      if (!fileName) {
-        return res.status(400).json({ error: "Invalid file name" });
-      }
-
-      const safeName = path.basename(fileName);
-      const filePath = path.join(uploadRootDir, safeName);
-
-      if (!fs.existsSync(filePath)) {
-        return res.status(404).json({ error: "File not found" });
-      }
-
-      // Optional: set download headers
-      res.setHeader("Content-Disposition", `inline; filename="${safeName}"`);
-
-      return res.sendFile(filePath);
-    } catch (err) {
-      return res.status(500).json({ error: "Download failed" });
-    }
-  });
 export { registerMessageRoutes };

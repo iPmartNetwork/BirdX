@@ -1,12 +1,12 @@
 export const ABOUT_CONTENT = {
   copyright: {
-    ownerLabel: "@bllackbull",
-    ownerHref: "https://github.com/bllackbull",
+    ownerLabel: "@iPmartNetwork",
+    ownerHref: "https://github.com/iPmartNetwork",
   },
   socials: [
     {
       icon: "github",
-      href: "https://github.com/bllackbull/Songbird",
+      href: "https://github.com/iPmartNetwork/BirdX",
     },
     {
       icon: "telegram",
@@ -18,7 +18,7 @@ export const ABOUT_CONTENT = {
     },
   ],
   supportIntro:
-    "If Songbird is useful to you, you can support ongoing development with these wallets:",
+    "If BirdX is useful to you, you can support ongoing development with these wallets:",
   wallets: [
     {
       label: "TRX",

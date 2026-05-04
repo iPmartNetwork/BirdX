@@ -68,7 +68,7 @@ export function AboutSettingsPanel({
   const versionLabel =
     String(appInfo?.version || "Unknown").trim() || "Unknown";
   const ownerHref = ABOUT_CONTENT.copyright?.ownerHref || "";
-  const ownerLabel = ABOUT_CONTENT.copyright?.ownerLabel || "bllackbull";
+  const ownerLabel = ABOUT_CONTENT.copyright?.ownerLabel || "iPmartNetwork";
   const year = new Date().getFullYear();
   const rowBase =
     "flex w-full items-center justify-between gap-3 rounded-2xl border border-emerald-200/70 bg-white/90 px-4 py-3 text-left text-sm font-semibold text-emerald-700 dark:border-emerald-500/30 dark:bg-slate-900/50 dark:text-emerald-200";
@@ -251,7 +251,7 @@ export function AboutSettingsPanel({
             </a>
           </p>
           <p className="mt-1 text-center text-[11px] text-slate-500 dark:text-slate-400">
-            All rights reserved. Songbird is a free and open-source project,
+            All rights reserved. BirdX is a free and open-source project,
             licensed under the MIT License.
           </p>
           <p className="mt-1 text-center text-[11px] text-slate-500 dark:text-slate-400">

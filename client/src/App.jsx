@@ -13,7 +13,7 @@ const PWA_PERMISSIONS_PROMPT_KEY = 'birdx-pwa-permissions-prompt'
 const ROUTE_CHUNK_TELEMETRY_KEY = 'birdx-route-chunk-telemetry-v1'
 const CHUNK_RECOVERY_ATTEMPT_KEY = 'birdx-chunk-recovery-attempted'
 const loadAuthPage = () => import('./pages/AuthPage.jsx')
-const loadChatPage = () => import('./pages/ChatPage.jsx')import logo from './assets/birdx-logo.svg'
+const loadChatPage = () => import('./pages/ChatPage.jsx')
 const loadInvitePage = () => import('./pages/InvitePage.jsx')
 const AuthPage = lazy(loadAuthPage)
 const ChatPage = lazy(loadChatPage)

@@ -1406,8 +1406,8 @@ export default function ChatPage({ user, setUser, isDark, setIsDark, toggleTheme
 
     document.title =
       totalUnreadCount > 0
-        ? `Songbird | ${totalUnread} new message${totalUnread === 1 ? "" : "s"}`
-        : "Songbird";
+        ? `BirdX | ${totalUnread} new message${totalUnread === 1 ? "" : "s"}`
+        : "BirdX";
     if (navigator?.setAppBadge) {
       if (totalUnreadCount > 0) {
         navigator.setAppBadge(totalUnreadCount).catch(() => null);
