@@ -37,7 +37,8 @@ Current release: `2.0.0`
 bash <(curl -fsSL https://raw.githubusercontent.com/iPmartNetwork/BirdX/master/install.sh)
 
 ## Manual Install
-git clone https://github.com/iPmartNetwork/BirdX
+git clone https://github.com/iPmartNetwork/BirdX 
+
 cd BirdX
 npm install
 npm run build
