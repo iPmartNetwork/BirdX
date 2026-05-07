@@ -39,8 +39,10 @@ bash <(curl -fsSL https://raw.githubusercontent.com/iPmartNetwork/BirdX/master/i
 ## Manual Install
 git clone https://github.com/iPmartNetwork/BirdX 
 
-cd BirdX
-npm install
+cd BirdX 
+
+npm install 
+
 npm run build
 
 ## Screenshots
@@ -87,7 +89,7 @@ BirdX voice calls use WebRTC for peer audio and Socket.IO for signaling.
 For best call reliability, configure a TURN server:
 
 ```env
-APP_TURN_URLS=turn:turn.ipmart.online:3478?transport=udp turn:turn.ipmart.online:3478?transport=tcp
+APP_TURN_URLS=turn:turn.domain.com:3478?transport=udp turn:turn.domain.com:3478?transport=tcp
 APP_TURN_USERNAME=birdx
 APP_TURN_CREDENTIAL=your_turn_password
 ```
