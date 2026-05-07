@@ -75,7 +75,7 @@ CHAT_MESSAGE_PAGE_SIZE=60
 CHAT_LIST_REFRESH_INTERVAL=20000
 CHAT_PRESENCE_PING_INTERVAL=5000
 
-APP_TURN_URLS=turn:turn.ipmart.online:3478?transport=udp turn:turn.ipmart.online:3478?transport=tcp
+APP_TURN_URLS=turn:turn.domain.com:3478?transport=udp turn:turn.domain.com:3478?transport=tcp
 APP_TURN_USERNAME=birdx
 APP_TURN_CREDENTIAL=your_turn_password
 ```
