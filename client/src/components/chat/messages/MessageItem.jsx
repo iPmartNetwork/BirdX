@@ -1036,6 +1036,19 @@ export const MessageItem = memo(function MessageItem({
                     @{mentionDebug?.active ?? 0}/{mentionDebug?.total ?? 0}
                   </div>
                 ) : null}
+				{Array.isArray(msg.reactions) && msg.reactions.length > 0 ? (
+  <div className="mt-2 flex flex-wrap gap-1">
+    {msg.reactions.map((r) => (
+      <span
+        key={r.reaction}
+        className="inline-flex items-center gap-1 rounded-full bg-black/5 px-2 py-0.5 text-xs dark:bg-white/10"
+      >
+        <span>{r.reaction}</span>
+        <span>{r.count}</span>
+      </span>
+    ))}
+  </div>
+) : null}
                 <div className="mt-2 flex items-center gap-1 text-[10px] text-slate-500 dark:text-slate-400">
                   <span>{msg._timeLabel || formatTime(msg.created_at)}</span>
                   {isEdited ? <span>edited</span> : null}
@@ -1183,6 +1196,19 @@ export const MessageItem = memo(function MessageItem({
                   @{mentionDebug?.active ?? 0}/{mentionDebug?.total ?? 0}
                 </div>
               ) : null}
+			  {Array.isArray(msg.reactions) && msg.reactions.length > 0 ? (
+  <div className="mt-2 flex flex-wrap gap-1">
+    {msg.reactions.map((r) => (
+      <span
+        key={r.reaction}
+        className="inline-flex items-center gap-1 rounded-full bg-black/5 px-2 py-0.5 text-xs dark:bg-white/10"
+      >
+        <span>{r.reaction}</span>
+        <span>{r.count}</span>
+      </span>
+    ))}
+  </div>
+) : null}
               <div
                 className={`mt-2 flex w-full items-center text-[10px] ${
                   isOwn

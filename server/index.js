@@ -24,6 +24,8 @@ import { buildTimestampSchedule } from "./lib/timeUtils.js";
 import { isLoopbackRequest, parseUploadFileMetadata } from "./lib/requestUtils.js";
 import { USER_COLORS, setUserColor } from "./settings/colors.js";
 import { readEnvBool, readEnvInt } from "./settings/env.js";
+import { createServer } from "node:http";
+import { Server as SocketIOServer } from "socket.io";
 import {
   addChatMember,
   adminGetAll,
@@ -93,6 +95,8 @@ import {
   deletePushSubscription,
   listPushSubscriptionsByUserIds,
   listMutedUserIdsForChat,
+  getMessageReactions,
+  toggleMessageReaction,
 } from "./db.js";
 
 process.title = "songbird-server";
@@ -543,6 +547,8 @@ const apiDeps = {
   upsertPushSubscription,
   sendPushNotificationToUsers,
   storageEncryption,
+  getMessageReactions,
+  toggleMessageReaction,
 };
 
 registerApiRoutes(app, apiDeps);
@@ -763,6 +769,173 @@ if (MESSAGE_TEXT_RETENTION_DAYS > 0) {
 
 backfillStorageEncryption();
 
-app.listen(port, () => {
-  console.log(`Songbird server running on http://localhost:${port}`);
+const httpServer = createServer(app);
+
+const io = new SocketIOServer(httpServer, {
+  cors: {
+    origin: "*",
+  },
+});
+
+const activeCalls = new Map();
+const liveCalls = new Map();
+
+function parseCallRoomChatId(roomId) {
+  const match = String(roomId || "").match(/^chat-(\d+)$/);
+  if (!match) return 0;
+  return Number(match[1] || 0);
+}
+
+async function notifyIncomingCallByPush({
+  roomId,
+  chatId,
+  callerUserId,
+  callerName,
+}) {
+  const targetChatId = Number(chatId || parseCallRoomChatId(roomId) || 0);
+  if (!targetChatId) return;
+  const chat = findChatById(targetChatId);
+  if (!chat || String(chat.type || "").toLowerCase() !== "dm") return;
+
+  const members = listChatMembers(targetChatId);
+  const mutedRows = listMutedUserIdsForChat(targetChatId);
+  const mutedIds = new Set(
+    mutedRows.map((row) => Number(row?.user_id || 0)).filter(Boolean),
+  );
+  const callerId = Number(callerUserId || 0);
+  const recipientIds = members
+    .map((member) => Number(member?.id || 0))
+    .filter(
+      (memberId) =>
+        Number.isFinite(memberId) &&
+        memberId > 0 &&
+        memberId !== callerId &&
+        !mutedIds.has(memberId),
+    );
+  if (!recipientIds.length) return;
+
+  await sendPushNotificationToUsers(recipientIds, {
+    title: "Incoming voice call",
+    body: `${callerName || "Someone"} is calling...`,
+    data: {
+      type: "incoming_call",
+      chatId: targetChatId,
+      roomId,
+      url: `/chat?openChatId=${encodeURIComponent(String(targetChatId))}`,
+    },
+  });
+}
+
+io.on("connection", (socket) => {
+  console.log("SOCKET CONNECTED:", socket.id);
+  const socketCallRooms = new Set();
+
+  socket.on("join-call", (roomId) => {
+    if (!roomId) return;
+    console.log("JOIN CALL:", socket.id, roomId);
+    socket.join(roomId);
+    socketCallRooms.add(roomId);
+
+    const activeCall = activeCalls.get(roomId);
+    if (activeCall && activeCall.callerSocketId !== socket.id) {
+      console.log("SEND PENDING INCOMING CALL:", socket.id, roomId);
+      socket.emit("incoming-call", activeCall);
+    }
+  });
+
+  socket.on("leave-call", (roomId) => {
+    if (!roomId) return;
+    console.log("LEAVE CALL:", socket.id, roomId);
+    activeCalls.delete(roomId);
+    liveCalls.delete(roomId);
+    socket.leave(roomId);
+    socket.to(roomId).emit("call-ended", { roomId });
+  });
+
+  socket.on("call-user", ({ roomId, chatId, callerUserId, callerUsername, callerName }) => {
+    if (!roomId) return;
+    socket.join(roomId);
+    socketCallRooms.add(roomId);
+
+    const payload = {
+      roomId,
+      chatId: Number(chatId || parseCallRoomChatId(roomId) || 0) || null,
+      callerUserId: Number(callerUserId || 0) || null,
+      callerUsername: callerUsername || "",
+      callerName: callerName || "Someone",
+      callerSocketId: socket.id,
+    };
+
+    activeCalls.set(roomId, payload);
+
+    console.log("CALL USER:", socket.id, roomId, callerName);
+    console.log(
+      "ROOM MEMBERS:",
+      roomId,
+      Array.from(io.sockets.adapter.rooms.get(roomId) || []),
+    );
+
+    socket.to(roomId).emit("incoming-call", payload);
+    notifyIncomingCallByPush(payload).catch((error) => {
+      console.warn("[call] incoming-call push failed:", String(error?.message || error));
+    });
+    console.log("INCOMING CALL EMITTED:", roomId);
+  });
+
+  socket.on("accept-call", ({ roomId }) => {
+    if (!roomId) return;
+    console.log("ACCEPT CALL:", socket.id, roomId);
+    socket.join(roomId);
+    socketCallRooms.add(roomId);
+    const activeCall = activeCalls.get(roomId);
+    if (activeCall?.callerSocketId) {
+      liveCalls.set(roomId, new Set([activeCall.callerSocketId, socket.id]));
+    }
+    activeCalls.delete(roomId);
+    socket.to(roomId).emit("call-accepted", { roomId });
+  });
+
+  socket.on("reject-call", ({ roomId }) => {
+    if (!roomId) return;
+    console.log("REJECT CALL:", socket.id, roomId);
+    activeCalls.delete(roomId);
+    socket.to(roomId).emit("call-rejected", { roomId });
+  });
+
+  socket.on("offer", ({ roomId, offer }) => {
+    if (!roomId || !offer) return;
+    console.log("OFFER:", socket.id, roomId);
+    socket.to(roomId).emit("offer", offer);
+  });
+
+  socket.on("answer", ({ roomId, answer }) => {
+    if (!roomId || !answer) return;
+    console.log("ANSWER:", socket.id, roomId);
+    socket.to(roomId).emit("answer", answer);
+  });
+
+  socket.on("ice-candidate", ({ roomId, candidate }) => {
+    if (!roomId || !candidate) return;
+    socket.to(roomId).emit("ice-candidate", candidate);
+  });
+
+  socket.on("disconnect", () => {
+    console.log("SOCKET DISCONNECTED:", socket.id);
+    for (const [roomId, activeCall] of activeCalls.entries()) {
+      if (activeCall?.callerSocketId === socket.id) {
+        activeCalls.delete(roomId);
+        socket.to(roomId).emit("call-ended", { roomId });
+      }
+    }
+    for (const roomId of socketCallRooms) {
+      const participants = liveCalls.get(roomId);
+      if (!participants?.has(socket.id)) continue;
+      liveCalls.delete(roomId);
+      socket.to(roomId).emit("call-ended", { roomId });
+    }
+  });
+});
+
+httpServer.listen(port, () => {
+  console.log(`BirdX server running on http://localhost:${port}`);
 });

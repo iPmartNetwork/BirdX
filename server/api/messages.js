@@ -61,6 +61,8 @@ function registerMessageRoutes(app, deps) {
     enqueueVideoTranscodeJob,
     markMessagesRead,
     markMessageRead,
+    getMessageReactions,
+    toggleMessageReaction,
   } = deps;
 
   const computeTextExpiryIso = (createdAt) => {
@@ -1139,56 +1141,111 @@ function registerMessageRoutes(app, deps) {
     res.json({ ok: true, id: Number(messageId) });
   });
 
-  app.post("/api/messages/delete", async (req, res) => {
+   app.post("/api/messages/delete", async (req, res) => {
+  const session = requireSession(req, res);
+  if (!session) return;
+
+  const { chatId, username, messageId, scope } = req.body || {};
+
+  if (!chatId || !username || !messageId) {
+    return res.status(400).json({
+      error: "Chat, username, and message id are required.",
+    });
+  }
+
+  if (!requireSessionUsernameMatch(res, session, username)) return;
+
+  const user = findUserByUsername(String(username || "").toLowerCase());
+  if (!user) {
+    return res.status(404).json({ error: "User not found." });
+  }
+
+  const numericChatId = Number(chatId);
+  if (!isMember(numericChatId, user.id)) {
+    return res.status(403).json({ error: "Not a member of this chat." });
+  }
+
+  const message = findMessageById(Number(messageId));
+  if (!message || Number(message.chat_id) !== numericChatId) {
+    return res.status(404).json({ error: "Message not found." });
+  }
+
+  if (scope === "everyone") {
+    const canDeleteForEveryone =
+      Number(message.user_id || 0) === Number(user.id) ||
+      ["owner", "admin"].includes(
+        String(getChatMemberRole(numericChatId, user.id) || "").toLowerCase(),
+      );
+
+    if (!canDeleteForEveryone) {
+      return res.status(403).json({
+        error: "You cannot delete this message for everyone.",
+      });
+    }
+
+    hideMessageForEveryone(Number(messageId));
+  } else {
+    hideMessageForUser(Number(messageId), Number(user.id));
+  }
+
+  emitChatEvent(numericChatId, {
+    type: "chat_message_deleted",
+    chatId: numericChatId,
+    messageId: Number(messageId),
+    scope: scope === "everyone" ? "everyone" : "me",
+    username: user.username,
+  });
+
+  return res.json({ ok: true });
+});
+
+app.post("/api/messages/react", (req, res) => {
+  try {
     const session = requireSession(req, res);
     if (!session) return;
 
-    const { chatId, username, messageId, scope } = req.body || {};
-    if (!chatId || !username || !messageId) {
-      return res.status(400).json({
-        error: "Chat, username, and message id are required.",
-      });
-    }
-    if (!requireSessionUsernameMatch(res, session, username)) return;
+    const userId = session.id || session.userId || session.user_id;
+    const { messageId, reaction } = req.body || {};
+    const numericMessageId = Number(messageId || 0);
+    const normalizedReaction = String(reaction || "").trim();
 
-    const user = findUserByUsername(String(username || "").toLowerCase());
-    if (!user) {
-      return res.status(404).json({ error: "User not found." });
+    if (!userId || !numericMessageId || !normalizedReaction) {
+      return res.status(400).json({ error: "Invalid data" });
     }
-    const numericChatId = Number(chatId);
-    if (!isMember(numericChatId, user.id)) {
+
+    const message = findMessageById(numericMessageId);
+    if (!message) {
+      return res.status(404).json({ error: "Message not found" });
+    }
+    const chatId = Number(message.chat_id || 0);
+    if (!chatId || !isMember(chatId, userId)) {
       return res.status(403).json({ error: "Not a member of this chat." });
     }
-    const message = findMessageById(Number(messageId));
-    if (!message || Number(message.chat_id) !== numericChatId) {
-      return res.status(404).json({ error: "Message not found." });
-    }
 
-    const deleteScope = String(scope || "").toLowerCase() === "everyone"
-      ? "everyone"
-      : "self";
+    const result = toggleMessageReaction(numericMessageId, userId, normalizedReaction);
+    const reactions = getMessageReactions([numericMessageId]).map((row) => ({
+      reaction: row.reaction,
+      count: Number(row.count || 0),
+    }));
 
-    if (deleteScope === "everyone") {
-      const role = String(getChatMemberRole(numericChatId, user.id)).toLowerCase();
-      const canDeleteForEveryone =
-        Number(message.user_id || 0) === Number(user.id) || role === "owner";
-      if (!canDeleteForEveryone) {
-        return res.status(403).json({
-          error: "You cannot delete this message for everyone.",
-        });
-      }
-      hideMessageForEveryone(message.id);
-      emitChatEvent(numericChatId, {
-        type: "chat_message_deleted",
-        chatId: numericChatId,
-        messageIds: [Number(message.id)],
-      });
-      return res.json({ ok: true, scope: "everyone", id: Number(message.id) });
-    }
+    emitChatEvent(chatId, {
+      type: "chat_message_updated",
+      chatId,
+      messageId: numericMessageId,
+      username: session.username || "",
+      reactions,
+    });
 
-    hideMessageForUser(message.id, user.id);
-    return res.json({ ok: true, scope: "self", id: Number(message.id) });
-  });
+    return res.json({
+      ...result,
+      messageId: numericMessageId,
+      reactions,
+    });
+  } catch (e) {
+    console.error("reaction failed:", e);
+    return res.status(500).json({ error: "reaction failed" });
+  }
+});
 
   app.post("/api/messages/forward", async (req, res) => {
     const session = requireSession(req, res);

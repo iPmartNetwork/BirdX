@@ -159,6 +159,7 @@ export default function App() {
     if (!isIOS || isStandaloneDisplay) return false
     return localStorage.getItem(PWA_INSTALL_DISMISS_KEY) !== '1'
   })
+  const [showAndroidInstallFallback, setShowAndroidInstallFallback] = useState(false)
   const [showInstallGuide, setShowInstallGuide] = useState(false)
   const [routeChunkLoading, setRouteChunkLoading] = useState(false)
   const preloadedRoutesRef = useRef(new Set())
@@ -171,7 +172,10 @@ export default function App() {
   const showInstallBar =
     !isStandaloneDisplay &&
     !installDismissed &&
-    (showInstallBanner || showIosInstallBanner || isDesktopViewport)
+    (showInstallBanner ||
+      showIosInstallBanner ||
+      showAndroidInstallFallback ||
+      isDesktopViewport)
 
   function normalizeSessionUser(data) {
     if (!data?.username) return null
@@ -385,6 +389,7 @@ export default function App() {
       setInstallPromptEvent(null)
       setShowInstallBanner(false)
       setShowIosInstallBanner(false)
+      setShowAndroidInstallFallback(false)
       setInstallDismissed(true)
       localStorage.setItem(PWA_INSTALL_DISMISS_KEY, '1')
       localStorage.setItem(PWA_PERMISSIONS_PROMPT_KEY, 'pending')
@@ -402,6 +407,21 @@ export default function App() {
       window.removeEventListener('birdx-show-install-bar', handleShowInstall)
     }
   }, [isStandaloneDisplay])
+
+  useEffect(() => {
+    if (!isAndroid || isStandaloneDisplay || installDismissed) {
+      setShowAndroidInstallFallback(false)
+      return undefined
+    }
+    if (installPromptEvent || showInstallBanner) {
+      setShowAndroidInstallFallback(false)
+      return undefined
+    }
+    const timer = window.setTimeout(() => {
+      setShowAndroidInstallFallback(true)
+    }, 2200)
+    return () => window.clearTimeout(timer)
+  }, [installDismissed, installPromptEvent, isAndroid, isStandaloneDisplay, showInstallBanner])
 
   useEffect(() => {
     if (!APP_CONFIG.debugEnabled) {
@@ -1001,6 +1021,7 @@ export default function App() {
         onDismiss={() => {
           setShowInstallBanner(false)
           setShowIosInstallBanner(false)
+          setShowAndroidInstallFallback(false)
           setInstallDismissed(true)
           localStorage.setItem(PWA_INSTALL_DISMISS_KEY, '1')
         }}
@@ -1021,6 +1042,7 @@ export default function App() {
             } finally {
               setInstallPromptEvent(null)
               setShowInstallBanner(false)
+              setShowAndroidInstallFallback(false)
             }
             return
           }
@@ -1031,6 +1053,7 @@ export default function App() {
       <InstallGuideModal
         open={showInstallGuide}
         iconSrc="/icons/icon-192.png"
+        isAndroid={isAndroid}
         isDesktop={isDesktopViewport}
         onClose={() => setShowInstallGuide(false)}
       />

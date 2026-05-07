@@ -16,6 +16,7 @@ import {
   Ghost,
   LoaderCircle,
   Mic,
+  Phone,
 } from "../../icons/lucide.js";
 import { getAvatarStyle } from "../../utils/avatarColor.js";
 import { hasPersian } from "../../utils/fontUtils.js";
@@ -41,6 +42,7 @@ import {
 
 export default function ChatWindowPanel({
   mobileTab,
+  onStartCall,
   activeChatId,
   activeChat = null,
   closeChat,
@@ -1197,6 +1199,17 @@ export default function ChatWindowPanel({
                 ) : null}
               </>
             </ContextMenuSurface>
+            {typeof onStartCall === "function" && !isGroupChat && !isChannelChat ? (
+  <button
+    type="button"
+    onClick={onStartCall}
+    className="inline-flex h-9 w-9 flex-shrink-0 items-center justify-center rounded-full border border-emerald-200 bg-white/80 text-[0px] text-emerald-700 transition hover:border-emerald-300 hover:bg-emerald-50 hover:shadow-md dark:border-emerald-500/30 dark:bg-slate-950 dark:text-emerald-200 dark:hover:bg-emerald-500/10"
+    aria-label="Start voice call"
+    title="Voice call"
+  >
+    <Phone size={17} strokeWidth={2.4} />
+  </button>
+) : null}
             {headerAvatarIcon ? (
               <ContextMenuSurface
                 as="div"

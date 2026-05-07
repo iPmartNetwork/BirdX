@@ -31,10 +31,11 @@ import { useNewGroupModal } from "../hooks/chat/useNewGroupModal.js";
 import { usePerfTelemetry } from "../hooks/chat/usePerfTelemetry.js";
 import { useResumeRefresh } from "../hooks/chat/useResumeRefresh.js";
 import { useAppReleaseInfo } from "../hooks/useAppReleaseInfo.js";
-import { Bookmark } from "../icons/lucide.js";
+import { Bookmark, Mic, MicOff, Phone, PhoneOff, Volume2 } from "../icons/lucide.js";
 import { CLIPBOARD_COPY_EVENT } from "../utils/clipboard.js";
 import { CACHE_STORES } from "../utils/cacheDb.js";
 import { downloadMessageFiles } from "../utils/fileDownload.js";
+import { io } from "socket.io-client";
 import {
   CHAT_CACHE_VERSION,
   buildChatListCacheKey,
@@ -81,6 +82,7 @@ import {
   searchUsers,
   sendTypingIndicator,
   sendMessage,
+  toggleMessageReaction,
   removeGroupMember,
   removeGroupAvatar,
   regenerateGroupInviteLink,
@@ -270,6 +272,97 @@ const patchChatAndMoveToFront = (chats, chatId, updateChat) => {
   return nextChats;
 };
 
+const splitEnvList = (value) =>
+  String(value || "")
+    .split(/[,\s]+/)
+    .map((item) => item.trim())
+    .filter(Boolean);
+
+const resolveCallIceServers = () => {
+  const turnUrls = splitEnvList(
+    import.meta.env.APP_TURN_URLS ||
+      import.meta.env.CHAT_TURN_URLS ||
+      import.meta.env.APP_TURN_URL ||
+      import.meta.env.CHAT_TURN_URL,
+  );
+  const turnUsername =
+    import.meta.env.APP_TURN_USERNAME || import.meta.env.CHAT_TURN_USERNAME || "";
+  const turnCredential =
+    import.meta.env.APP_TURN_CREDENTIAL || import.meta.env.CHAT_TURN_CREDENTIAL || "";
+  const iceServers = [
+    { urls: "stun:stun.l.google.com:19302" },
+    { urls: "stun:stun1.l.google.com:19302" },
+  ];
+  if (turnUrls.length) {
+    iceServers.push({
+      urls: turnUrls,
+      ...(turnUsername ? { username: turnUsername } : {}),
+      ...(turnCredential ? { credential: turnCredential } : {}),
+    });
+  }
+  return iceServers;
+};
+
+const CALL_ICE_SERVERS = resolveCallIceServers();
+
+const CALL_STATUS_LABELS = {
+  preparing: "Preparing microphone...",
+  calling: "Calling...",
+  ringing: "Incoming voice call",
+  connecting: "Connecting...",
+  connected: "Connected",
+  reconnecting: "Reconnecting...",
+  ended: "Call ended",
+  error: "Call failed",
+};
+
+const CALL_RING_PATTERN = [0, 280, 520, 800, 1500];
+const CALL_RING_LOOP_MS = 2400;
+
+const formatCallDuration = (seconds) => {
+  const total = Math.max(0, Number(seconds || 0));
+  const minutes = Math.floor(total / 60);
+  const remainingSeconds = total % 60;
+  return `${minutes}:${String(remainingSeconds).padStart(2, "0")}`;
+};
+
+const getCallErrorMessage = (error) => {
+  const name = String(error?.name || "");
+  if (name === "NotAllowedError" || name === "PermissionDeniedError") {
+    return "Microphone permission was denied.";
+  }
+  if (name === "NotFoundError" || name === "DevicesNotFoundError") {
+    return "No microphone was found on this device.";
+  }
+  if (name === "NotReadableError" || name === "TrackStartError") {
+    return "The microphone is already in use by another app.";
+  }
+  return error?.message || "Voice call could not be started.";
+};
+
+const buildCallChatUrl = (chatId) => {
+  const numericChatId = Number(chatId || 0);
+  if (!numericChatId) return "/chat";
+  return `/chat?openChatId=${encodeURIComponent(String(numericChatId))}`;
+};
+
+const isLoopbackHost = (hostname) =>
+  hostname === "localhost" ||
+  hostname === "127.0.0.1" ||
+  hostname === "::1" ||
+  hostname?.endsWith?.(".localhost");
+
+const resolveSocketOrigin = () => {
+  if (typeof window === "undefined") return undefined;
+  const explicitUrl = import.meta.env.APP_SOCKET_URL || import.meta.env.CHAT_SOCKET_URL;
+  if (explicitUrl) return explicitUrl;
+  const { protocol, hostname, port, origin } = window.location;
+  if (port === "5173" && isLoopbackHost(hostname)) {
+    return `${protocol}//${hostname}:5174`;
+  }
+  return origin;
+};
+
  
 
 export default function ChatPage({ user, setUser, isDark, setIsDark, toggleTheme }) {
@@ -314,6 +407,10 @@ export default function ChatPage({ user, setUser, isDark, setIsDark, toggleTheme
   const [forwardMessageTarget, setForwardMessageTarget] = useState(null);
   const [forwardSavedChat, setForwardSavedChat] = useState(null);
   const [copyToastVisible, setCopyToastVisible] = useState(false);
+  const [callState, setCallState] = useState(null);
+  const [incomingCall, setIncomingCall] = useState(null);
+  const [callMuted, setCallMuted] = useState(false);
+  const [callDurationSeconds, setCallDurationSeconds] = useState(0);
   const updateToastTimerRef = useRef(null);
   const copyToastTimerRef = useRef(null);
   const chatScrollRef = useRef(null);
@@ -348,6 +445,640 @@ export default function ChatPage({ user, setUser, isDark, setIsDark, toggleTheme
   const messageBlobUrlsRef = useRef(new Set());
   const [sseConnected, setSseConnected] = useState(false);
   const lazyChunksPreloadedRef = useRef(false);
+  const peerRef = useRef(null);
+  const localStreamRef = useRef(null);
+  const remoteAudioRef = useRef(null);
+  const socketRef = useRef(null);
+  const activeChatIdRef = useRef(null);
+  const callStateRef = useRef(null);
+  const incomingCallRef = useRef(null);
+  const joinedCallRoomsRef = useRef(new Set());
+  const chatsRef = useRef([]);
+  const pendingOfferRef = useRef(null);
+  const pendingAnswerRef = useRef(null);
+  const pendingIceCandidatesRef = useRef([]);
+  const callResetTimerRef = useRef(null);
+  const ringtoneAudioContextRef = useRef(null);
+  const ringtoneTimersRef = useRef([]);
+  const ringtoneActiveRef = useRef(false);
+  const incomingCallNotificationRef = useRef(null);
+
+  function setSyncedCallState(value) {
+    setCallState((prev) => {
+      const next = typeof value === "function" ? value(prev) : value;
+      callStateRef.current = next;
+      return next;
+    });
+  }
+
+  function setSyncedIncomingCall(value) {
+    incomingCallRef.current = value;
+    setIncomingCall(value);
+  }
+
+  function ensureRemoteAudioElement() {
+    if (remoteAudioRef.current || typeof Audio === "undefined") {
+      return remoteAudioRef.current;
+    }
+    const audio = new Audio();
+    audio.autoplay = true;
+    audio.playsInline = true;
+    remoteAudioRef.current = audio;
+    return audio;
+  }
+
+  function updateCallStatus(status, patch = {}) {
+    setSyncedCallState((prev) => {
+      if (!prev) return prev;
+      return { ...prev, status, ...patch };
+    });
+  }
+
+  function joinCallRoom(roomId, socket = socketRef.current) {
+    const normalizedRoomId = String(roomId || "").trim();
+    if (!normalizedRoomId || !socket?.connected) return false;
+    if (joinedCallRoomsRef.current.has(normalizedRoomId)) return true;
+    socket.emit("join-call", normalizedRoomId);
+    joinedCallRoomsRef.current.add(normalizedRoomId);
+    return true;
+  }
+
+  function joinKnownCallRooms(socket = socketRef.current) {
+    if (!socket?.connected) return;
+    const roomIds = new Set();
+    if (activeChatIdRef.current) {
+      roomIds.add(`chat-${activeChatIdRef.current}`);
+    }
+    if (callStateRef.current?.roomId) {
+      roomIds.add(callStateRef.current.roomId);
+    }
+    (Array.isArray(chatsRef.current) ? chatsRef.current : []).forEach((chat) => {
+      const chatId = Number(chat?.id || 0);
+      const chatType = String(chat?.type || "").toLowerCase();
+      if (!chatId || chatType !== "dm") return;
+      roomIds.add(`chat-${chatId}`);
+    });
+    roomIds.forEach((roomId) => joinCallRoom(roomId, socket));
+  }
+
+  function syncLocalAudioMute(nextMuted) {
+    localStreamRef.current?.getAudioTracks?.().forEach((track) => {
+      track.enabled = !nextMuted;
+    });
+  }
+
+  function toggleCallMute() {
+    setCallMuted((prev) => {
+      const next = !prev;
+      syncLocalAudioMute(next);
+      return next;
+    });
+  }
+
+  function getRingtoneAudioContext() {
+    if (typeof window === "undefined") return null;
+    const AudioContextCtor = window.AudioContext || window.webkitAudioContext;
+    if (!AudioContextCtor) return null;
+    if (!ringtoneAudioContextRef.current) {
+      ringtoneAudioContextRef.current = new AudioContextCtor();
+    }
+    return ringtoneAudioContextRef.current;
+  }
+
+  async function unlockRingtoneAudio() {
+    const audioContext = getRingtoneAudioContext();
+    if (!audioContext) return;
+    try {
+      if (audioContext.state === "suspended") {
+        await audioContext.resume();
+      }
+    } catch {
+      // Browsers may keep audio locked until a direct user gesture.
+    }
+  }
+
+  function playRingtonePulse() {
+    const audioContext = getRingtoneAudioContext();
+    if (!audioContext) return;
+    if (audioContext.state === "suspended") {
+      void audioContext.resume().catch(() => null);
+      if (audioContext.state === "suspended") return;
+    }
+
+    try {
+      const now = audioContext.currentTime;
+      const gain = audioContext.createGain();
+      const osc = audioContext.createOscillator();
+      osc.type = "sine";
+      osc.frequency.setValueAtTime(880, now);
+      osc.frequency.setValueAtTime(660, now + 0.14);
+      gain.gain.setValueAtTime(0.0001, now);
+      gain.gain.exponentialRampToValueAtTime(0.16, now + 0.025);
+      gain.gain.exponentialRampToValueAtTime(0.0001, now + 0.24);
+      osc.connect(gain);
+      gain.connect(audioContext.destination);
+      osc.start(now);
+      osc.stop(now + 0.28);
+    } catch {
+      // Ringtone is a best-effort helper; the visual incoming-call card remains.
+    }
+  }
+
+  function stopIncomingRingtone() {
+    ringtoneActiveRef.current = false;
+    ringtoneTimersRef.current.forEach((timer) => window.clearTimeout(timer));
+    ringtoneTimersRef.current = [];
+    try {
+      incomingCallNotificationRef.current?.close?.();
+    } catch {
+      // ignore notification cleanup failures
+    }
+    incomingCallNotificationRef.current = null;
+  }
+
+  function startIncomingRingtone() {
+    if (typeof window === "undefined") return;
+    stopIncomingRingtone();
+    ringtoneActiveRef.current = true;
+
+    const scheduleLoop = () => {
+      if (!ringtoneActiveRef.current) return;
+      CALL_RING_PATTERN.forEach((delay) => {
+        const timer = window.setTimeout(() => {
+          if (ringtoneActiveRef.current) playRingtonePulse();
+        }, delay);
+        ringtoneTimersRef.current.push(timer);
+      });
+      const loopTimer = window.setTimeout(scheduleLoop, CALL_RING_LOOP_MS);
+      ringtoneTimersRef.current.push(loopTimer);
+    };
+
+    void unlockRingtoneAudio().finally(scheduleLoop);
+  }
+
+  async function showIncomingCallNotification(payload) {
+    if (typeof window === "undefined" || !("Notification" in window)) return;
+    if (Notification.permission !== "granted") return;
+    const chatId = Number(payload?.chatId || String(payload?.roomId || "").replace(/^chat-/, ""));
+    const title = "Incoming voice call";
+    const body = `${payload?.callerName || "Someone"} is calling...`;
+    const options = {
+      body,
+      tag: `birdx-call-${payload?.roomId || chatId || "incoming"}`,
+      renotify: true,
+      requireInteraction: true,
+      icon: "/icons/icon-192.png",
+      badge: "/icons/icon-192.png",
+      data: {
+        type: "incoming_call",
+        chatId,
+        roomId: payload?.roomId || "",
+        url: buildCallChatUrl(chatId),
+      },
+    };
+
+    try {
+      if ("serviceWorker" in navigator) {
+        const registration = await navigator.serviceWorker.ready;
+        if (registration?.showNotification) {
+          await registration.showNotification(title, options);
+          return;
+        }
+      }
+    } catch {
+      // Fall back to a page notification below.
+    }
+
+    try {
+      const notification = new Notification(title, options);
+      notification.onclick = () => {
+        window.focus?.();
+        if (chatId) {
+          window.sessionStorage.setItem(OPEN_CHAT_ID_KEY, String(chatId));
+        }
+      };
+      incomingCallNotificationRef.current = notification;
+    } catch {
+      // ignore local notification failures
+    }
+  }
+
+  function cleanupCallMedia() {
+    localStreamRef.current?.getTracks?.().forEach((track) => {
+      try {
+        track.stop();
+      } catch (error) {
+        console.warn("Failed to stop local audio track:", error);
+      }
+    });
+    localStreamRef.current = null;
+
+    try {
+      peerRef.current?.close?.();
+    } catch (error) {
+      console.warn("Failed to close peer connection:", error);
+    }
+    peerRef.current = null;
+
+    if (remoteAudioRef.current) {
+      try {
+        remoteAudioRef.current.pause?.();
+        remoteAudioRef.current.srcObject = null;
+      } catch (error) {
+        console.warn("Failed to clear remote audio:", error);
+      }
+      remoteAudioRef.current = null;
+    }
+  }
+
+  function resetCallState() {
+    if (callResetTimerRef.current && typeof window !== "undefined") {
+      window.clearTimeout(callResetTimerRef.current);
+      callResetTimerRef.current = null;
+    }
+    cleanupCallMedia();
+    stopIncomingRingtone();
+    pendingOfferRef.current = null;
+    pendingAnswerRef.current = null;
+    pendingIceCandidatesRef.current = [];
+    setCallMuted(false);
+    setCallDurationSeconds(0);
+    setSyncedIncomingCall(null);
+    setSyncedCallState(null);
+  }
+
+  function scheduleCallReset(delayMs = 2200) {
+    if (typeof window === "undefined") {
+      resetCallState();
+      return;
+    }
+    if (callResetTimerRef.current) {
+      window.clearTimeout(callResetTimerRef.current);
+    }
+    callResetTimerRef.current = window.setTimeout(() => {
+      callResetTimerRef.current = null;
+      resetCallState();
+    }, delayMs);
+  }
+
+  function validateMicrophoneSupport() {
+    if (typeof navigator === "undefined" || !navigator.mediaDevices?.getUserMedia) {
+      throw new Error("Microphone API is not available in this browser.");
+    }
+    if (typeof window !== "undefined") {
+      const { hostname, protocol } = window.location;
+      if (protocol !== "https:" && !isLoopbackHost(hostname)) {
+        throw new Error("Voice calls require HTTPS or localhost.");
+      }
+    }
+    if (typeof RTCPeerConnection === "undefined") {
+      throw new Error("WebRTC is not available in this browser.");
+    }
+  }
+
+  async function flushPendingIceCandidates() {
+    const peer = peerRef.current;
+    if (!peer?.remoteDescription || !pendingIceCandidatesRef.current.length) {
+      return;
+    }
+    const queuedCandidates = [...pendingIceCandidatesRef.current];
+    pendingIceCandidatesRef.current = [];
+    for (const candidate of queuedCandidates) {
+      try {
+        await peer.addIceCandidate(new RTCIceCandidate(candidate));
+      } catch (error) {
+        console.warn("Queued ICE candidate failed:", error);
+      }
+    }
+  }
+
+  async function createAndSendOffer(roomId) {
+    const peer = peerRef.current;
+    const socket = socketRef.current;
+    if (!peer || !socket || !roomId) return;
+    if (peer.signalingState !== "stable") return;
+
+    const offer = await peer.createOffer();
+    await peer.setLocalDescription(offer);
+    socket.emit("offer", {
+      roomId,
+      offer: peer.localDescription || offer,
+    });
+    updateCallStatus("connecting");
+  }
+
+  async function handleIncomingAnswer(answer) {
+    const peer = peerRef.current;
+    if (!answer) return;
+    if (!peer || peer.signalingState !== "have-local-offer") {
+      pendingAnswerRef.current = answer;
+      return;
+    }
+    await peer.setRemoteDescription(new RTCSessionDescription(answer));
+    await flushPendingIceCandidates();
+  }
+
+  async function flushPendingAnswer() {
+    if (!pendingAnswerRef.current) return;
+    const answer = pendingAnswerRef.current;
+    pendingAnswerRef.current = null;
+    await handleIncomingAnswer(answer);
+  }
+
+  async function handleIncomingOffer(offer) {
+    const peer = peerRef.current;
+    const roomId = callStateRef.current?.roomId || incomingCallRef.current?.roomId;
+    if (!offer) return;
+    if (!peer || !roomId) {
+      pendingOfferRef.current = offer;
+      return;
+    }
+    if (peer.signalingState !== "stable") {
+      pendingOfferRef.current = offer;
+      return;
+    }
+
+    await peer.setRemoteDescription(new RTCSessionDescription(offer));
+    await flushPendingIceCandidates();
+    const answer = await peer.createAnswer();
+    await peer.setLocalDescription(answer);
+    socketRef.current?.emit?.("answer", {
+      roomId,
+      answer: peer.localDescription || answer,
+    });
+    updateCallStatus("connecting");
+  }
+
+  async function flushPendingOffer() {
+    if (!pendingOfferRef.current) return;
+    const offer = pendingOfferRef.current;
+    pendingOfferRef.current = null;
+    await handleIncomingOffer(offer);
+  }
+
+  async function handleRemoteIceCandidate(candidate) {
+    if (!candidate) return;
+    const peer = peerRef.current;
+    if (!peer?.remoteDescription) {
+      pendingIceCandidatesRef.current.push(candidate);
+      return;
+    }
+    await peer.addIceCandidate(new RTCIceCandidate(candidate));
+  }
+
+  async function prepareCallPeer(roomId) {
+    validateMicrophoneSupport();
+    ensureRemoteAudioElement();
+
+    const existingPeer = peerRef.current;
+    const hasLiveAudio = localStreamRef.current
+      ?.getAudioTracks?.()
+      ?.some((track) => track.readyState === "live");
+    if (existingPeer && existingPeer.connectionState !== "closed" && hasLiveAudio) {
+      return existingPeer;
+    }
+
+    cleanupCallMedia();
+    ensureRemoteAudioElement();
+
+    const stream = await navigator.mediaDevices.getUserMedia({
+      audio: {
+        echoCancellation: true,
+        noiseSuppression: true,
+        autoGainControl: true,
+      },
+      video: false,
+    });
+    localStreamRef.current = stream;
+    setMicrophonePermission("granted");
+    syncLocalAudioMute(callMuted);
+
+    const peer = new RTCPeerConnection({
+      iceServers: CALL_ICE_SERVERS,
+      iceCandidatePoolSize: 4,
+    });
+    peerRef.current = peer;
+
+    stream.getTracks().forEach((track) => {
+      peer.addTrack(track, stream);
+    });
+
+    peer.onicecandidate = (event) => {
+      const activeRoomId = callStateRef.current?.roomId || roomId;
+      if (!event.candidate || !activeRoomId) return;
+      socketRef.current?.emit?.("ice-candidate", {
+        roomId: activeRoomId,
+        candidate: event.candidate,
+      });
+    };
+
+    peer.ontrack = (event) => {
+      const [remoteStream] = event.streams || [];
+      if (!remoteStream) return;
+      const audio = ensureRemoteAudioElement();
+      if (!audio) return;
+      audio.muted = false;
+      audio.volume = 1;
+      audio.srcObject = remoteStream;
+      audio.play?.().catch((error) => {
+        console.warn("Remote audio playback was blocked:", error);
+        updateCallStatus("connected", {
+          playbackBlocked: true,
+          error: "Tap the call card once if you cannot hear audio.",
+        });
+      });
+      updateCallStatus("connected");
+    };
+
+    peer.onconnectionstatechange = () => {
+      const state = peer.connectionState;
+      if (state === "connected") {
+        updateCallStatus("connected");
+      } else if (state === "disconnected") {
+        updateCallStatus("reconnecting");
+      } else if (state === "failed" || state === "closed") {
+        updateCallStatus("ended");
+        scheduleCallReset();
+      }
+    };
+
+    peer.oniceconnectionstatechange = () => {
+      const state = peer.iceConnectionState;
+      if (state === "connected" || state === "completed") {
+        updateCallStatus("connected");
+      } else if (state === "failed" || state === "closed") {
+        updateCallStatus("ended");
+        scheduleCallReset();
+      }
+    };
+
+    await flushPendingOffer();
+    await flushPendingAnswer();
+    await flushPendingIceCandidates();
+    return peer;
+  }
+
+  async function startOutgoingCall() {
+    const chatId = Number(activeChatIdRef.current || activeChatId || 0);
+    if (!chatId || callStateRef.current) return;
+
+    const socket = socketRef.current;
+    const roomId = `chat-${chatId}`;
+    const peerName = activeFallbackTitle || activeHeaderAvatar?.nickname || "Contact";
+    const nextState = {
+      roomId,
+      chatId,
+      isCaller: true,
+      status: "preparing",
+      peerName,
+      error: "",
+    };
+
+    setSyncedIncomingCall(null);
+    setSyncedCallState(nextState);
+    setCallMuted(false);
+    setCallDurationSeconds(0);
+
+    try {
+      if (!socket?.connected) {
+        throw new Error("Call service is not connected yet.");
+      }
+      joinCallRoom(roomId, socket);
+      await prepareCallPeer(roomId);
+      socket.emit("call-user", {
+        roomId,
+        chatId,
+        callerUserId: user?.id || null,
+        callerUsername: user?.username || "",
+        callerName: user?.nickname || user?.username || "Someone",
+      });
+      updateCallStatus("calling");
+    } catch (error) {
+      console.error("Start call failed:", error);
+      if (String(error?.name || "") === "NotAllowedError") {
+        setMicrophonePermission("denied");
+      }
+      updateCallStatus("error", { error: getCallErrorMessage(error) });
+      scheduleCallReset(2600);
+    }
+  }
+
+  async function acceptIncomingCall() {
+    const payload = incomingCallRef.current;
+    const roomId = payload?.roomId;
+    if (!roomId || callStateRef.current) return;
+
+    stopIncomingRingtone();
+    setSyncedIncomingCall(null);
+    setSyncedCallState({
+      roomId,
+      chatId: Number(String(roomId).replace(/^chat-/, "")) || null,
+      isCaller: false,
+      status: "connecting",
+      peerName: payload?.callerName || "Caller",
+      error: "",
+    });
+    setCallMuted(false);
+    setCallDurationSeconds(0);
+
+    try {
+      const socket = socketRef.current;
+      if (!socket?.connected) {
+        throw new Error("Call service is not connected yet.");
+      }
+      joinCallRoom(roomId, socket);
+      await prepareCallPeer(roomId);
+      socket.emit("accept-call", { roomId });
+      updateCallStatus("connecting", { startedAt: Date.now() });
+      await flushPendingOffer();
+    } catch (error) {
+      console.error("Accept call failed:", error);
+      if (String(error?.name || "") === "NotAllowedError") {
+        setMicrophonePermission("denied");
+      }
+      socketRef.current?.emit?.("reject-call", { roomId });
+      updateCallStatus("error", { error: getCallErrorMessage(error) });
+      scheduleCallReset(2600);
+    }
+  }
+
+  function rejectIncomingCall() {
+    const roomId = incomingCallRef.current?.roomId;
+    if (roomId) {
+      socketRef.current?.emit?.("reject-call", { roomId });
+    }
+    stopIncomingRingtone();
+    setSyncedIncomingCall(null);
+  }
+
+  function endActiveCall() {
+    const roomId = callStateRef.current?.roomId;
+    if (roomId) {
+      socketRef.current?.emit?.("leave-call", roomId);
+    }
+    updateCallStatus("ended");
+    scheduleCallReset(450);
+  }
+
+  useEffect(() => {
+    callStateRef.current = callState;
+  }, [callState]);
+
+  useEffect(() => {
+    incomingCallRef.current = incomingCall;
+  }, [incomingCall]);
+
+  useEffect(() => {
+    if (incomingCall) {
+      startIncomingRingtone();
+      void showIncomingCallNotification(incomingCall);
+      return () => stopIncomingRingtone();
+    }
+    stopIncomingRingtone();
+    return undefined;
+  }, [incomingCall?.roomId]);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return undefined;
+    const unlock = () => {
+      void unlockRingtoneAudio();
+    };
+    window.addEventListener("pointerdown", unlock, { passive: true });
+    window.addEventListener("keydown", unlock);
+    return () => {
+      window.removeEventListener("pointerdown", unlock);
+      window.removeEventListener("keydown", unlock);
+    };
+  }, []);
+
+  useEffect(() => {
+    activeChatIdRef.current = activeChatId;
+  }, [activeChatId]);
+
+  useEffect(() => {
+    chatsRef.current = chats;
+    joinKnownCallRooms();
+  }, [chats]);
+
+  useEffect(() => {
+    if (!callState?.startedAt) {
+      setCallDurationSeconds(0);
+      return undefined;
+    }
+    const syncDuration = () => {
+      const startedAt = Number(callStateRef.current?.startedAt || 0);
+      if (!startedAt) {
+        setCallDurationSeconds(0);
+        return;
+      }
+      setCallDurationSeconds(
+        Math.max(0, Math.floor((Date.now() - startedAt) / 1000)),
+      );
+    };
+    syncDuration();
+    const timer = window.setInterval(syncDuration, 1000);
+    return () => window.clearInterval(timer);
+  }, [callState?.startedAt]);
 
   useEffect(() => {
     setReplyTarget(null);
@@ -358,6 +1089,134 @@ export default function ChatPage({ user, setUser, isDark, setIsDark, toggleTheme
     setForwardSavedChat(null);
   }, [activeChatId]);
 
+  useEffect(() => {
+    const socket = io(resolveSocketOrigin(), {
+      path: "/socket.io/",
+      transports: ["websocket", "polling"],
+      withCredentials: true,
+      reconnection: true,
+      reconnectionAttempts: Infinity,
+      timeout: 10000,
+    });
+
+    socketRef.current = socket;
+
+    socket.on("connect", () => {
+      joinedCallRoomsRef.current.clear();
+      joinKnownCallRooms(socket);
+    });
+
+    socket.on("connect_error", (error) => {
+      console.warn("Call socket connection failed:", error?.message || error);
+      if (callStateRef.current) {
+        updateCallStatus("error", {
+          error: "Call service is not reachable.",
+        });
+      }
+    });
+
+    socket.on("incoming-call", (payload) => {
+      if (!payload?.roomId || payload?.callerSocketId === socket.id) return;
+      const activeRoomId = callStateRef.current?.roomId;
+      if (activeRoomId && activeRoomId !== payload.roomId) {
+        socket.emit("reject-call", { roomId: payload.roomId });
+        return;
+      }
+      if (activeRoomId === payload.roomId) return;
+      setSyncedIncomingCall({
+        ...payload,
+        chatId: Number(payload?.chatId || String(payload.roomId).replace(/^chat-/, "")) || null,
+        status: "ringing",
+      });
+    });
+
+    socket.on("call-ended", (payload) => {
+      const roomId = payload?.roomId;
+      if (!roomId || callStateRef.current?.roomId === roomId) {
+        updateCallStatus("ended");
+        scheduleCallReset(900);
+      }
+      if (incomingCallRef.current?.roomId === roomId) {
+        stopIncomingRingtone();
+        setSyncedIncomingCall(null);
+      }
+    });
+
+    socket.on("call-rejected", (payload) => {
+      const roomId = payload?.roomId;
+      if (!roomId || callStateRef.current?.roomId === roomId) {
+        updateCallStatus("ended", { error: "Call was rejected." });
+        scheduleCallReset(1400);
+      }
+      if (incomingCallRef.current?.roomId === roomId) {
+        stopIncomingRingtone();
+        setSyncedIncomingCall(null);
+      }
+    });
+
+    socket.on("call-accepted", async (payload) => {
+      const roomId = payload?.roomId || callStateRef.current?.roomId;
+      if (!roomId || callStateRef.current?.roomId !== roomId) return;
+      if (!callStateRef.current?.isCaller) return;
+      try {
+        await prepareCallPeer(roomId);
+        await createAndSendOffer(roomId);
+        updateCallStatus("connecting", { startedAt: Date.now() });
+      } catch (error) {
+        console.error("Create offer failed:", error);
+        updateCallStatus("error", { error: getCallErrorMessage(error) });
+        scheduleCallReset(2600);
+      }
+    });
+
+    socket.on("offer", async (offer) => {
+      try {
+        await handleIncomingOffer(offer);
+      } catch (error) {
+        console.error("Offer handling failed:", error);
+        updateCallStatus("error", { error: getCallErrorMessage(error) });
+        scheduleCallReset(2600);
+      }
+    });
+
+    socket.on("answer", async (answer) => {
+      try {
+        await handleIncomingAnswer(answer);
+      } catch (error) {
+        console.error("Answer handling failed:", error);
+        updateCallStatus("error", { error: getCallErrorMessage(error) });
+        scheduleCallReset(2600);
+      }
+    });
+
+    socket.on("ice-candidate", async (candidate) => {
+      try {
+        await handleRemoteIceCandidate(candidate);
+      } catch (error) {
+        console.warn("ICE candidate failed:", error);
+      }
+    });
+
+    return () => {
+      socket.off("connect");
+      socket.off("connect_error");
+      socket.off("incoming-call");
+      socket.off("call-ended");
+      socket.off("call-rejected");
+      socket.off("call-accepted");
+      socket.off("offer");
+      socket.off("answer");
+      socket.off("ice-candidate");
+      socket.disconnect();
+      socketRef.current = null;
+      resetCallState();
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!activeChatId) return;
+    joinCallRoom(`chat-${activeChatId}`);
+  }, [activeChatId]);
   useEffect(() => {
     if (lazyChunksPreloadedRef.current) return;
     let cancelled = false;
@@ -734,7 +1593,6 @@ export default function ChatPage({ user, setUser, isDark, setIsDark, toggleTheme
 
   const settingsMenuRef = useRef(null);
   const settingsButtonRef = useRef(null);
-  const activeChatIdRef = useRef(null);
   const activeChatTypeRef = useRef(null);
   const sseReconnectRef = useRef(null);
   const isMarkingReadRef = useRef(false);
@@ -1220,6 +2078,9 @@ export default function ChatPage({ user, setUser, isDark, setIsDark, toggleTheme
     setUserScrolledUp,
   });
 
+useEffect(() => {
+  activeChatIdRef.current = activeChatId;
+}, [activeChatId]);
 
   useEffect(() => {
     pendingUploadFilesRef.current = pendingUploadFiles;
@@ -2030,7 +2891,7 @@ const peerStatusLabel = !activeHeaderPeer || activeHeaderPeer?.isDeleted
     const text = String(value || "").trim();
     if (!text) return "";
     if (text.length <= maxChars) return text;
-    return `${text.slice(0, Math.max(1, maxChars - 1)).trimEnd()}…`;
+    return `${text.slice(0, Math.max(1, maxChars - 1)).trimEnd()}Ã¢â‚¬Â¦`;
   }, []);
   const typingIndicator = useMemo(() => {
     if (!activeTypingUsers.length) return null;
@@ -3739,7 +4600,8 @@ const peerStatusLabel = !activeHeaderPeer || activeHeaderPeer?.isDeleted
 
       const pendingOpenChatId = Number(
         typeof window !== "undefined"
-          ? window.sessionStorage.getItem(OPEN_CHAT_ID_KEY)
+          ? window.sessionStorage.getItem(OPEN_CHAT_ID_KEY) ||
+              new URLSearchParams(window.location.search).get("openChatId")
           : 0,
       );
       if (pendingOpenChatId > 0) {
@@ -3758,6 +4620,13 @@ const peerStatusLabel = !activeHeaderPeer || activeHeaderPeer?.isDeleted
           }
           setMobileTab("chat");
           window.sessionStorage.removeItem(OPEN_CHAT_ID_KEY);
+          if (typeof window !== "undefined") {
+            const url = new URL(window.location.href);
+            if (url.searchParams.has("openChatId")) {
+              url.searchParams.delete("openChatId");
+              window.history.replaceState({}, "", `${url.pathname}${url.search}${url.hash}`);
+            }
+          }
         }
       }
     } catch (error) {
@@ -5219,6 +6088,72 @@ const peerStatusLabel = !activeHeaderPeer || activeHeaderPeer?.isDeleted
     }
   }
 
+  async function handleReactMessage(message, reaction) {
+    const messageId = Number(message?._serverId || message?.id || 0);
+    const normalizedReaction = String(reaction || "").trim();
+    if (!messageId || !normalizedReaction) return;
+
+    const applyReactionsToMessage = (nextReactions) => {
+      const normalizedReactions = Array.isArray(nextReactions) ? nextReactions : [];
+      setMessages((prev) =>
+        prev.map((item) => {
+          const itemId = Number(item?._serverId || item?.id || 0);
+          return itemId === messageId
+            ? {
+                ...item,
+                reactions: normalizedReactions,
+              }
+            : item;
+        }),
+      );
+    };
+
+    const currentReactions = Array.isArray(message?.reactions)
+      ? message.reactions
+      : [];
+    const existingReaction = currentReactions.find(
+      (item) => String(item?.reaction || "") === normalizedReaction,
+    );
+    const optimisticReactions = existingReaction
+      ? currentReactions
+          .map((item) =>
+            String(item?.reaction || "") === normalizedReaction
+              ? { ...item, count: Math.max(0, Number(item?.count || 0) - 1) }
+              : item,
+          )
+          .filter((item) => Number(item?.count || 0) > 0)
+      : [
+          ...currentReactions,
+          {
+            reaction: normalizedReaction,
+            count: 1,
+          },
+        ];
+
+    applyReactionsToMessage(optimisticReactions);
+
+    try {
+      const res = await toggleMessageReaction({
+        messageId,
+        reaction: normalizedReaction,
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        throw new Error(data?.error || "Unable to react to message.");
+      }
+      const nextReactions = Array.isArray(data?.reactions) ? data.reactions : [];
+      applyReactionsToMessage(nextReactions);
+      scheduleMessageRefresh(activeChatIdRef.current || activeChatId, {
+        preserveHistory: true,
+      });
+    } catch (error) {
+      console.warn("Message reaction failed:", error);
+      scheduleMessageRefresh(activeChatIdRef.current || activeChatId, {
+        preserveHistory: true,
+      });
+    }
+  }
+
   const { contextMenu, closeContextMenu, openContextMenu } = useAppContextMenu({
     activeChatId,
     chats,
@@ -5229,6 +6164,7 @@ const peerStatusLabel = !activeHeaderPeer || activeHeaderPeer?.isDeleted
     onReplyToMessage: handleStartReply,
     onEditMessage: handleStartEdit,
     onDeleteMessage: handleDeleteMessageRequest,
+    onReactMessage: handleReactMessage,
     onForwardMessage: handleOpenForwardModal,
     onSaveMessageFiles: handleSaveMessageFiles,
     onOpenOrCreateDm: openOrCreateDmFromMember,
@@ -5340,6 +6276,7 @@ const peerStatusLabel = !activeHeaderPeer || activeHeaderPeer?.isDeleted
       }, 0);
     }
   };
+  
   const handleUserScrollIntent = () => {
     cancelSmoothScroll?.();
     allowStartReachedRef.current = true;
@@ -5403,6 +6340,20 @@ const peerStatusLabel = !activeHeaderPeer || activeHeaderPeer?.isDeleted
       microphone: readPermissionDismissed("microphone"),
     });
   }, [isAppActive, notificationPermission, microphonePermission]);
+
+  const canStartVoiceCall = Boolean(
+    activeChatId &&
+      !isActiveGroupChat &&
+      !isActiveChannelChat &&
+      !isActiveSavedChat &&
+      !activeHeaderAvatar?.isDeleted,
+  );
+  const callStatusLabel =
+    CALL_STATUS_LABELS[callState?.status] || CALL_STATUS_LABELS.connecting;
+  const callPeerName = callState?.peerName || activeFallbackTitle || "Contact";
+  const callDurationLabel = formatCallDuration(callDurationSeconds);
+  const callIsConnected =
+    callState?.status === "connected" || callState?.status === "reconnecting";
 
   return (
     <div
@@ -5522,6 +6473,7 @@ const peerStatusLabel = !activeHeaderPeer || activeHeaderPeer?.isDeleted
         activeFallbackTitle={activeFallbackTitle}
         peerStatusLabel={resolvedHeaderSubtitle}
         typingIndicator={typingIndicator}
+        onStartCall={canStartVoiceCall ? startOutgoingCall : null}
         isGroupChat={isActiveGroupChat}
         isChannelChat={isActiveChannelChat}
         isSavedChat={isActiveSavedChat}
@@ -5851,17 +6803,125 @@ const peerStatusLabel = !activeHeaderPeer || activeHeaderPeer?.isDeleted
       ) : null}
 
       {whatsNewOpen ? (
-        <Suspense fallback={null}>
-          <WhatsNewModal
-            open={whatsNewOpen}
-            version={appInfo?.version || ""}
-            changelog={appInfo?.currentChangelog || appInfo?.changelog || ""}
-            changelogSections={appInfo?.changelogSections || []}
-            onClose={() => dismissWhatsNew(true)}
-          />
-        </Suspense>
-      ) : null}
+  <Suspense fallback={null}>
+    <WhatsNewModal
+      open={whatsNewOpen}
+      version={appInfo?.version || ""}
+      changelog={appInfo?.currentChangelog || appInfo?.changelog || ""}
+      changelogSections={appInfo?.changelogSections || []}
+      onClose={() => dismissWhatsNew(true)}
+    />
+  </Suspense>
+) : null}
 
+{callState ? (
+  <div className="fixed inset-0 z-[300] flex items-center justify-center bg-slate-950/75 px-4 py-6 backdrop-blur-sm">
+    <div className="w-full max-w-sm overflow-hidden rounded-[2rem] border border-white/10 bg-white shadow-2xl dark:bg-slate-950">
+      <div className="relative px-6 pb-6 pt-7 text-center text-slate-900 dark:text-white">
+        <div className="absolute inset-x-0 top-0 h-28 bg-emerald-500/15 dark:bg-emerald-400/10" />
+        <div className="relative mx-auto flex h-20 w-20 items-center justify-center rounded-full border border-emerald-200 bg-emerald-50 text-2xl font-bold text-emerald-700 shadow-lg shadow-emerald-500/20 dark:border-emerald-500/30 dark:bg-emerald-500/15 dark:text-emerald-100">
+          {getAvatarInitials(callPeerName || "C")}
+        </div>
+        <h2 className="relative mt-4 truncate text-xl font-bold" title={callPeerName}>
+          {callPeerName}
+        </h2>
+        <div className="relative mt-2 flex items-center justify-center gap-2 text-sm text-slate-500 dark:text-slate-400">
+          <span
+            className={`h-2.5 w-2.5 rounded-full ${
+              callState.status === "connected"
+                ? "bg-emerald-500"
+                : callState.status === "error" || callState.status === "ended"
+                  ? "bg-rose-500"
+                  : "animate-pulse bg-amber-400"
+            }`}
+          />
+          <span>{callStatusLabel}</span>
+          {callIsConnected ? <span>{callDurationLabel}</span> : null}
+        </div>
+        {callState.error ? (
+          <p className="relative mt-4 rounded-2xl border border-amber-200 bg-amber-50 px-3 py-2 text-xs font-semibold text-amber-700 dark:border-amber-500/30 dark:bg-amber-500/10 dark:text-amber-100">
+            {callState.error}
+          </p>
+        ) : null}
+      </div>
+
+      <div className="grid grid-cols-3 gap-3 border-y border-slate-200 bg-slate-50 px-5 py-4 dark:border-white/10 dark:bg-slate-900/80">
+        <button
+          type="button"
+          onClick={toggleCallMute}
+          className={`flex h-14 flex-col items-center justify-center gap-1 rounded-2xl border text-xs font-semibold transition ${
+            callMuted
+              ? "border-amber-300 bg-amber-100 text-amber-700 dark:border-amber-500/40 dark:bg-amber-500/15 dark:text-amber-100"
+              : "border-slate-200 bg-white text-slate-700 hover:border-emerald-300 hover:text-emerald-700 dark:border-white/10 dark:bg-slate-950 dark:text-slate-200 dark:hover:border-emerald-500/40 dark:hover:text-emerald-100"
+          }`}
+        >
+          {callMuted ? <MicOff size={18} /> : <Mic size={18} />}
+          {callMuted ? "Muted" : "Mic"}
+        </button>
+        <button
+          type="button"
+          onClick={() => remoteAudioRef.current?.play?.().catch(() => null)}
+          className="flex h-14 flex-col items-center justify-center gap-1 rounded-2xl border border-slate-200 bg-white text-xs font-semibold text-slate-700 transition hover:border-emerald-300 hover:text-emerald-700 dark:border-white/10 dark:bg-slate-950 dark:text-slate-200 dark:hover:border-emerald-500/40 dark:hover:text-emerald-100"
+        >
+          <Volume2 size={18} />
+          Audio
+        </button>
+        <button
+          type="button"
+          onClick={endActiveCall}
+          className="flex h-14 flex-col items-center justify-center gap-1 rounded-2xl border border-rose-300 bg-rose-500 text-xs font-semibold text-white shadow-lg shadow-rose-500/25 transition hover:bg-rose-600"
+        >
+          <PhoneOff size={18} />
+          End
+        </button>
+      </div>
+
+      <div className="px-6 py-4 text-center text-xs font-medium text-slate-500 dark:text-slate-400">
+        {CALL_ICE_SERVERS.some((server) => String([].concat(server.urls || []).join(" ")).includes("turn:"))
+          ? "Relay ready for strict mobile networks"
+          : "Add a TURN server for the most reliable mobile audio"}
+      </div>
+    </div>
+  </div>
+) : null}
+
+{incomingCall ? (
+  <div className="fixed inset-0 z-[310] flex items-center justify-center bg-slate-950/75 px-4 py-6 backdrop-blur-sm">
+    <div className="w-full max-w-sm rounded-[2rem] border border-white/10 bg-white p-6 text-center shadow-2xl dark:bg-slate-950">
+      <div className="mx-auto flex h-20 w-20 items-center justify-center rounded-full border border-emerald-200 bg-emerald-50 text-2xl font-bold text-emerald-700 shadow-lg shadow-emerald-500/20 dark:border-emerald-500/30 dark:bg-emerald-500/15 dark:text-emerald-100">
+        {getAvatarInitials(incomingCall.callerName || "C")}
+      </div>
+
+      <h2 className="mt-4 text-xl font-bold text-slate-900 dark:text-white">
+        Incoming Call
+      </h2>
+
+      <p className="mt-2 text-sm text-slate-500 dark:text-slate-400">
+        {incomingCall.callerName || "Someone"} is calling...
+      </p>
+
+      <div className="mt-6 grid grid-cols-2 gap-3">
+        <button
+          type="button"
+          onClick={rejectIncomingCall}
+          className="inline-flex items-center justify-center gap-2 rounded-2xl bg-rose-500 px-4 py-3 text-sm font-semibold text-white shadow-lg shadow-rose-500/25 transition hover:bg-rose-600"
+        >
+          <PhoneOff size={17} strokeWidth={2.4} />
+          Reject
+        </button>
+
+        <button
+          type="button"
+          onClick={acceptIncomingCall}
+          className="inline-flex items-center justify-center gap-2 rounded-2xl bg-emerald-500 px-4 py-3 text-sm font-semibold text-white shadow-lg shadow-emerald-500/25 transition hover:bg-emerald-600"
+        >
+          <Phone size={17} strokeWidth={2.4} />
+          Accept
+        </button>
+      </div>
+    </div>
+  </div>
+) : null}
       <AppContextMenu menu={contextMenu} onClose={closeContextMenu} />
     </div>
   );

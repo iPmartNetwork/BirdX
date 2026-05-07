@@ -1290,11 +1290,37 @@ export function getMessages(chatId, options = {}) {
 
   const totalCount = Number(totalRow?.total || 0);
 
-  return {
-    messages: rows.map(decryptMessageRow),
-    hasMore,
-    totalCount,
-  };
+const messageIds = rows
+  .map((row) => Number(row.id || 0))
+  .filter((id) => Number.isFinite(id) && id > 0);
+
+const reactions = getMessageReactions(messageIds);
+
+const reactionsByMessageId = reactions.reduce((acc, row) => {
+  const messageId = Number(row.message_id || 0);
+  if (!messageId) return acc;
+
+  if (!acc[messageId]) acc[messageId] = [];
+
+  acc[messageId].push({
+    reaction: row.reaction,
+    count: Number(row.count || 0),
+  });
+
+  return acc;
+}, {});
+
+return {
+  messages: rows.map((row) => {
+    const message = decryptMessageRow(row);
+    return {
+      ...message,
+      reactions: reactionsByMessageId[Number(message.id || 0)] || [],
+    };
+  }),
+  hasMore,
+  totalCount,
+};
 }
 
 export function listMessageFilesByMessageIds(messageIds = []) {
@@ -1617,6 +1643,44 @@ export function getSession(token) {
       AND COALESCE(users.banned, 0) = 0
   `,
     [token],
+  );
+}
+
+export function toggleMessageReaction(messageId, userId, reaction) {
+  const exists = getRow(
+    "SELECT id FROM message_reactions WHERE message_id=? AND user_id=? AND reaction=?",
+    [messageId, userId, reaction]
+  );
+
+  if (exists) {
+    run(
+      "DELETE FROM message_reactions WHERE message_id=? AND user_id=? AND reaction=?",
+      [messageId, userId, reaction]
+    );
+    return { removed: true };
+  }
+
+  run(
+    "INSERT INTO message_reactions (message_id, user_id, reaction) VALUES (?, ?, ?)",
+    [messageId, userId, reaction]
+  );
+
+  return { added: true };
+}
+
+export function getMessageReactions(messageIds = []) {
+  if (!messageIds.length) return [];
+
+  const placeholders = messageIds.map(() => "?").join(",");
+
+  return getAll(
+    `
+    SELECT message_id, reaction, COUNT(*) as count
+    FROM message_reactions
+    WHERE message_id IN (${placeholders})
+    GROUP BY message_id, reaction
+    `,
+    messageIds,
   );
 }
 

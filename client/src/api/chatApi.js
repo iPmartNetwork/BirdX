@@ -290,6 +290,13 @@ export const deleteMessage = (payload) =>
     body: JSON.stringify(payload),
   });
 
+export const toggleMessageReaction = (payload) =>
+  apiFetch(`${API_BASE}/api/messages/react`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+
 export const forwardMessage = (payload) =>
   apiFetch(`${API_BASE}/api/messages/forward`, {
     method: "POST",
