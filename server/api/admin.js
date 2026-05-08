@@ -21,6 +21,7 @@ function registerAdminRoutes(app, deps) {
     NICKNAME_MAX,
     USERNAME_MAX,
     MESSAGE_MAX_CHARS,
+    ACCOUNT_CREATION,
     USERNAME_REGEX,
     isLoopbackRequest,
     removeAllMessageUploads,
@@ -57,6 +58,13 @@ function registerAdminRoutes(app, deps) {
         adminRun("ALTER TABLE users ADD COLUMN role TEXT NOT NULL DEFAULT 'user'");
       }
 
+      if (!adminHasColumn("sessions", "ip_address")) {
+        adminRun("ALTER TABLE sessions ADD COLUMN ip_address TEXT");
+      }
+      if (!adminHasColumn("sessions", "user_agent")) {
+        adminRun("ALTER TABLE sessions ADD COLUMN user_agent TEXT");
+      }
+
       adminRun(`
         CREATE TABLE IF NOT EXISTS admin_audit_logs (
           id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -80,6 +88,16 @@ function registerAdminRoutes(app, deps) {
         ON admin_audit_logs(actor_user_id)
       `);
 
+      if (!adminHasColumn("admin_audit_logs", "ip_address")) {
+        adminRun("ALTER TABLE admin_audit_logs ADD COLUMN ip_address TEXT");
+      }
+      if (!adminHasColumn("admin_audit_logs", "user_agent")) {
+        adminRun("ALTER TABLE admin_audit_logs ADD COLUMN user_agent TEXT");
+      }
+      if (!adminHasColumn("admin_audit_logs", "success")) {
+        adminRun("ALTER TABLE admin_audit_logs ADD COLUMN success INTEGER NOT NULL DEFAULT 1");
+      }
+
       adminSave();
     } catch (error) {
       console.warn("[admin] schema self-heal failed:", String(error?.message || error));
@@ -88,32 +106,83 @@ function registerAdminRoutes(app, deps) {
 
   ensureAdminSchema();
 
-  const normalizeAdminRole = (value) =>
-    String(value || "").trim().toLowerCase() === "admin" ? "admin" : "user";
+  const ADMIN_ROLES = ["owner", "admin", "moderator", "support"];
+  const ALL_ROLES = [...ADMIN_ROLES, "user"];
+  const normalizeAdminRole = (value) => {
+    const role = String(value || "").trim().toLowerCase();
+    return ALL_ROLES.includes(role) ? role : "user";
+  };
+
+  const resolveSessionRole = (session) => {
+    const username = String(session?.username || "").toLowerCase();
+    if (adminUsernameSet.has(username)) return "owner";
+    return normalizeAdminRole(session?.role);
+  };
+
+  const hasPermission = (session, permission) => {
+    const role = resolveSessionRole(session);
+    if (role === "owner") return true;
+    const permissions = {
+      view: ["admin", "moderator", "support"],
+      usersRead: ["admin", "moderator", "support"],
+      usersWrite: ["admin"],
+      rolesWrite: ["admin"],
+      chatsWrite: ["admin", "moderator"],
+      filesWrite: ["admin", "moderator"],
+      auditRead: ["admin"],
+      backupsWrite: ["admin"],
+      settingsRead: ["admin", "moderator", "support"],
+    };
+    return (permissions[permission] || []).includes(role);
+  };
 
   const isAdminSession = (session) =>
     Boolean(
       session &&
-        (normalizeAdminRole(session.role) === "admin" ||
+        (ADMIN_ROLES.includes(resolveSessionRole(session)) ||
           adminUsernameSet.has(String(session.username || "").toLowerCase())),
     );
 
-  const requireAdminSession = (req, res) => {
+  const requireAdminSession = (req, res, permission = "view") => {
     const session = requireSession?.(req, res);
     if (!session) return null;
     if (!isAdminSession(session)) {
       res.status(403).json({ error: "Admin access is required." });
       return null;
     }
+    if (!hasPermission(session, permission)) {
+      res.status(403).json({ error: "You do not have permission for this admin action." });
+      return null;
+    }
     return session;
   };
 
-  const writeAuditLog = (session, action, targetType = "", targetId = "", details = {}) => {
+  const getRequestIp = (req) =>
+    String(
+      req?.headers?.["x-forwarded-for"] ||
+        req?.headers?.["x-real-ip"] ||
+        req?.socket?.remoteAddress ||
+        req?.ip ||
+        "",
+    )
+      .split(",")[0]
+      .trim();
+
+  const writeAuditLog = (
+    req,
+    session,
+    action,
+    targetType = "",
+    targetId = "",
+    details = {},
+    success = true,
+  ) => {
     try {
       adminRun(
         `INSERT INTO admin_audit_logs (
-          actor_user_id, actor_username, action, target_type, target_id, details
-        ) VALUES (?, ?, ?, ?, ?, ?)`,
+          actor_user_id, actor_username, action, target_type, target_id, details,
+          ip_address, user_agent, success
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         [
           Number(session?.id || 0) || null,
           session?.username || "",
@@ -121,6 +190,9 @@ function registerAdminRoutes(app, deps) {
           String(targetType || ""),
           String(targetId || ""),
           JSON.stringify(details || {}),
+          getRequestIp(req),
+          String(req?.headers?.["user-agent"] || "").slice(0, 500),
+          success ? 1 : 0,
         ],
       );
       adminSave();
@@ -154,7 +226,24 @@ function registerAdminRoutes(app, deps) {
   };
 
   const countRoleAdmins = () =>
-    Number(adminGetRow("SELECT COUNT(*) AS count FROM users WHERE role = 'admin'")?.count || 0);
+    Number(adminGetRow("SELECT COUNT(*) AS count FROM users WHERE role IN ('owner', 'admin')")?.count || 0);
+
+  const requireAdminPassword = (req, res, session) => {
+    const password = String(req.body?.adminPassword || "");
+    if (!password) {
+      res.status(400).json({ error: "Admin password confirmation is required." });
+      return false;
+    }
+    const user = adminGetRow("SELECT password_hash FROM users WHERE id = ?", [
+      Number(session?.id || 0),
+    ]);
+    if (!user?.password_hash || !bcrypt.compareSync(password, user.password_hash)) {
+      writeAuditLog(req, session, "admin.reauth.failed", "user", session?.id || "", {}, false);
+      res.status(403).json({ error: "Admin password confirmation failed." });
+      return false;
+    }
+    return true;
+  };
 
   const backupDir = path.join(projectRootDir, "data", "backups");
   const dbFilePath = path.join(projectRootDir, "data", "songbird.db");
@@ -192,7 +281,7 @@ function registerAdminRoutes(app, deps) {
         id: session.id,
         username: session.username,
         nickname: session.nickname || null,
-        role: normalizeAdminRole(session.role),
+        role: resolveSessionRole(session),
         isAdmin: true,
       },
     });
@@ -205,7 +294,10 @@ function registerAdminRoutes(app, deps) {
     const users = adminGetRow(`
       SELECT
         COUNT(*) AS total,
-        SUM(CASE WHEN role = 'admin' THEN 1 ELSE 0 END) AS admins,
+        SUM(CASE WHEN role IN ('owner', 'admin') THEN 1 ELSE 0 END) AS admins,
+        SUM(CASE WHEN role = 'owner' THEN 1 ELSE 0 END) AS owners,
+        SUM(CASE WHEN role = 'moderator' THEN 1 ELSE 0 END) AS moderators,
+        SUM(CASE WHEN role = 'support' THEN 1 ELSE 0 END) AS support,
         SUM(CASE WHEN COALESCE(banned, 0) = 1 THEN 1 ELSE 0 END) AS banned,
         SUM(CASE WHEN julianday('now') - julianday(last_seen) <= (15.0 / 1440.0) THEN 1 ELSE 0 END) AS recentlyActive
       FROM users
@@ -234,6 +326,9 @@ function registerAdminRoutes(app, deps) {
         users: {
           total: Number(users?.total || 0),
           admins: Number(users?.admins || 0),
+          owners: Number(users?.owners || 0),
+          moderators: Number(users?.moderators || 0),
+          support: Number(users?.support || 0),
           banned: Number(users?.banned || 0),
           recentlyActive: Number(users?.recentlyActive || 0),
         },
@@ -252,14 +347,14 @@ function registerAdminRoutes(app, deps) {
       latestAudit,
       admin: {
         username: session.username,
-        role: normalizeAdminRole(session.role),
+        role: resolveSessionRole(session),
         envAdmin: adminUsernameSet.has(String(session.username || "").toLowerCase()),
       },
     });
   });
 
   app.get("/api/admin/users", (req, res) => {
-    const session = requireAdminSession(req, res);
+    const session = requireAdminSession(req, res, "usersRead");
     if (!session) return;
 
     const { page, pageSize, offset } = resolvePagination(req.query);
@@ -272,7 +367,7 @@ function registerAdminRoutes(app, deps) {
       where.push("(users.username LIKE ? OR users.nickname LIKE ?)");
       params.push(`%${query}%`, `%${query}%`);
     }
-    if (role === "admin" || role === "user") {
+    if (ALL_ROLES.includes(role)) {
       where.push("users.role = ?");
       params.push(role);
     }
@@ -335,7 +430,7 @@ function registerAdminRoutes(app, deps) {
   });
 
   app.get("/api/admin/users/:id", (req, res) => {
-    const session = requireAdminSession(req, res);
+    const session = requireAdminSession(req, res, "usersRead");
     if (!session) return;
 
     const userId = toInt(req.params.id);
@@ -365,7 +460,7 @@ function registerAdminRoutes(app, deps) {
       [userId, userId, userId, userId, userId],
     );
     const sessions = adminGetAll(
-      `SELECT id, created_at, last_seen
+      `SELECT id, created_at, last_seen, ip_address, user_agent
        FROM sessions
        WHERE user_id = ?
        ORDER BY datetime(last_seen) DESC, id DESC`,
@@ -425,7 +520,7 @@ function registerAdminRoutes(app, deps) {
   });
 
   app.patch("/api/admin/users/:id", (req, res) => {
-    const session = requireAdminSession(req, res);
+    const session = requireAdminSession(req, res, "usersWrite");
     if (!session) return;
 
     const userId = toInt(req.params.id);
@@ -437,11 +532,22 @@ function registerAdminRoutes(app, deps) {
 
     const updates = [];
     const params = [];
+    const targetRole = normalizeAdminRole(target.role);
+    const sessionRole = resolveSessionRole(session);
+    if (targetRole === "owner" && sessionRole !== "owner") {
+      return res.status(403).json({ error: "Only an owner can change an owner account." });
+    }
     if (req.body?.role !== undefined) {
+      if (!hasPermission(session, "rolesWrite")) {
+        return res.status(403).json({ error: "You do not have permission to change roles." });
+      }
       const nextRole = normalizeAdminRole(req.body.role);
+      if (nextRole === "owner" && sessionRole !== "owner") {
+        return res.status(403).json({ error: "Only an owner can assign the owner role." });
+      }
       if (
-        normalizeAdminRole(target.role) === "admin" &&
-        nextRole !== "admin" &&
+        ["owner", "admin"].includes(targetRole) &&
+        !["owner", "admin"].includes(nextRole) &&
         countRoleAdmins() <= 1 &&
         !adminUsernameSet.size
       ) {
@@ -455,18 +561,22 @@ function registerAdminRoutes(app, deps) {
       params.push(req.body.banned ? 1 : 0);
     }
     if (!updates.length) return res.status(400).json({ error: "No changes provided." });
+    if (!requireAdminPassword(req, res, session)) return;
     params.push(userId);
     adminRun(`UPDATE users SET ${updates.join(", ")} WHERE id = ?`, params);
     if (req.body?.banned) {
       adminRun("DELETE FROM sessions WHERE user_id = ?", [userId]);
     }
     adminSave();
-    writeAuditLog(session, "user.update", "user", userId, req.body || {});
+    writeAuditLog(req, session, "user.update", "user", userId, {
+      role: req.body?.role,
+      banned: req.body?.banned,
+    });
     res.json({ ok: true });
   });
 
   app.post("/api/admin/users/:id/reset-password", async (req, res) => {
-    const session = requireAdminSession(req, res);
+    const session = requireAdminSession(req, res, "usersWrite");
     if (!session) return;
 
     const userId = toInt(req.params.id);
@@ -476,17 +586,18 @@ function registerAdminRoutes(app, deps) {
     }
     const target = userId ? adminGetRow("SELECT id, username FROM users WHERE id = ?", [userId]) : null;
     if (!target?.id) return res.status(404).json({ error: "User not found." });
+    if (!requireAdminPassword(req, res, session)) return;
 
     const passwordHash = await bcrypt.hash(password, 10);
     adminRun("UPDATE users SET password_hash = ? WHERE id = ?", [passwordHash, userId]);
     adminRun("DELETE FROM sessions WHERE user_id = ?", [userId]);
     adminSave();
-    writeAuditLog(session, "user.reset_password", "user", userId, { username: target.username });
+    writeAuditLog(req, session, "user.reset_password", "user", userId, { username: target.username });
     res.json({ ok: true });
   });
 
   app.delete("/api/admin/users/:id/sessions", (req, res) => {
-    const session = requireAdminSession(req, res);
+    const session = requireAdminSession(req, res, "usersWrite");
     if (!session) return;
 
     const userId = toInt(req.params.id);
@@ -495,10 +606,11 @@ function registerAdminRoutes(app, deps) {
     if (Number(userId) === Number(session.id)) {
       return res.status(400).json({ error: "Use logout to end your own current session." });
     }
+    if (!requireAdminPassword(req, res, session)) return;
     const removed = Number(adminGetRow("SELECT COUNT(*) AS count FROM sessions WHERE user_id = ?", [userId])?.count || 0);
     adminRun("DELETE FROM sessions WHERE user_id = ?", [userId]);
     adminSave();
-    writeAuditLog(session, "user.sessions.delete_all", "user", userId, {
+    writeAuditLog(req, session, "user.sessions.delete_all", "user", userId, {
       username: target.username,
       removed,
     });
@@ -506,7 +618,7 @@ function registerAdminRoutes(app, deps) {
   });
 
   app.delete("/api/admin/users/:id/sessions/:sessionId", (req, res) => {
-    const session = requireAdminSession(req, res);
+    const session = requireAdminSession(req, res, "usersWrite");
     if (!session) return;
 
     const userId = toInt(req.params.id);
@@ -521,9 +633,10 @@ function registerAdminRoutes(app, deps) {
       userId,
     ]);
     if (!existing?.id) return res.status(404).json({ error: "Session not found." });
+    if (!requireAdminPassword(req, res, session)) return;
     adminRun("DELETE FROM sessions WHERE id = ? AND user_id = ?", [sessionId, userId]);
     adminSave();
-    writeAuditLog(session, "user.session.delete", "session", sessionId, {
+    writeAuditLog(req, session, "user.session.delete", "session", sessionId, {
       userId,
       username: target.username,
     });
@@ -531,7 +644,7 @@ function registerAdminRoutes(app, deps) {
   });
 
   app.delete("/api/admin/users/:id", (req, res) => {
-    const session = requireAdminSession(req, res);
+    const session = requireAdminSession(req, res, "usersWrite");
     if (!session) return;
 
     const userId = toInt(req.params.id);
@@ -540,13 +653,18 @@ function registerAdminRoutes(app, deps) {
     }
     const target = userId ? adminGetRow("SELECT id, username, role FROM users WHERE id = ?", [userId]) : null;
     if (!target?.id) return res.status(404).json({ error: "User not found." });
-    if (normalizeAdminRole(target.role) === "admin" && countRoleAdmins() <= 1 && !adminUsernameSet.size) {
+    const targetRole = normalizeAdminRole(target.role);
+    if (targetRole === "owner" && resolveSessionRole(session) !== "owner") {
+      return res.status(403).json({ error: "Only an owner can delete an owner account." });
+    }
+    if (["owner", "admin"].includes(targetRole) && countRoleAdmins() <= 1 && !adminUsernameSet.size) {
       return res.status(400).json({ error: "At least one admin is required." });
     }
+    if (!requireAdminPassword(req, res, session)) return;
 
     const result = deleteUserById(userId);
     removeStoredFileNames(result?.storedNames || []);
-    writeAuditLog(session, "user.delete", "user", userId, { username: target.username, result });
+    writeAuditLog(req, session, "user.delete", "user", userId, { username: target.username, result });
     res.json({ ok: true, result });
   });
 
@@ -611,15 +729,16 @@ function registerAdminRoutes(app, deps) {
   });
 
   app.delete("/api/admin/chats/:id", (req, res) => {
-    const session = requireAdminSession(req, res);
+    const session = requireAdminSession(req, res, "chatsWrite");
     if (!session) return;
 
     const chatId = toInt(req.params.id);
     const target = chatId ? adminGetRow("SELECT id, name, type FROM chats WHERE id = ?", [chatId]) : null;
     if (!target?.id) return res.status(404).json({ error: "Chat not found." });
+    if (!requireAdminPassword(req, res, session)) return;
     const result = deleteChatById(chatId);
     removeStoredFileNames(result?.storedNames || []);
-    writeAuditLog(session, "chat.delete", "chat", chatId, { name: target.name, type: target.type, result });
+    writeAuditLog(req, session, "chat.delete", "chat", chatId, { name: target.name, type: target.type, result });
     res.json({ ok: true, result });
   });
 
@@ -678,7 +797,7 @@ function registerAdminRoutes(app, deps) {
   });
 
   app.delete("/api/admin/files/:id", (req, res) => {
-    const session = requireAdminSession(req, res);
+    const session = requireAdminSession(req, res, "filesWrite");
     if (!session) return;
 
     const fileId = toInt(req.params.id);
@@ -686,10 +805,11 @@ function registerAdminRoutes(app, deps) {
       ? adminGetRow("SELECT id, stored_name, message_id, original_name FROM chat_message_files WHERE id = ?", [fileId])
       : null;
     if (!target?.id) return res.status(404).json({ error: "File not found." });
+    if (!requireAdminPassword(req, res, session)) return;
     adminRun("DELETE FROM chat_message_files WHERE id = ?", [fileId]);
     adminSave();
     removeStoredFileNames([target.stored_name]);
-    writeAuditLog(session, "file.delete", "file", fileId, {
+    writeAuditLog(req, session, "file.delete", "file", fileId, {
       messageId: target.message_id,
       originalName: target.original_name,
     });
@@ -697,7 +817,7 @@ function registerAdminRoutes(app, deps) {
   });
 
   app.get("/api/admin/audit-logs", (req, res) => {
-    const session = requireAdminSession(req, res);
+    const session = requireAdminSession(req, res, "auditRead");
     if (!session) return;
 
     const { page, pageSize, offset } = resolvePagination(req.query);
@@ -725,7 +845,8 @@ function registerAdminRoutes(app, deps) {
     )?.total;
 
     const logs = adminGetAll(`
-      SELECT id, actor_user_id, actor_username, action, target_type, target_id, details, created_at
+      SELECT id, actor_user_id, actor_username, action, target_type, target_id, details,
+             ip_address, user_agent, success, created_at
       FROM admin_audit_logs
       ${whereSql}
       ORDER BY datetime(created_at) DESC, id DESC
@@ -737,7 +858,7 @@ function registerAdminRoutes(app, deps) {
       } catch {
         details = {};
       }
-      return { ...log, details };
+      return { ...log, success: Boolean(Number(log.success || 0)), details };
     });
     res.json({
       ok: true,
@@ -747,14 +868,15 @@ function registerAdminRoutes(app, deps) {
   });
 
   app.get("/api/admin/backups", (req, res) => {
-    const session = requireAdminSession(req, res);
+    const session = requireAdminSession(req, res, "settingsRead");
     if (!session) return;
     res.json({ ok: true, backups: listBackupFiles() });
   });
 
   app.post("/api/admin/backups", (req, res) => {
-    const session = requireAdminSession(req, res);
+    const session = requireAdminSession(req, res, "backupsWrite");
     if (!session) return;
+    if (!requireAdminPassword(req, res, session)) return;
     if (!fs.existsSync(dbFilePath)) {
       return res.status(404).json({ error: "Database file was not found." });
     }
@@ -769,7 +891,7 @@ function registerAdminRoutes(app, deps) {
     const targetPath = path.join(backupDir, name);
     fs.copyFileSync(dbFilePath, targetPath);
     const stat = fs.statSync(targetPath);
-    writeAuditLog(session, "backup.create", "backup", name, {
+    writeAuditLog(req, session, "backup.create", "backup", name, {
       sizeBytes: stat.size,
     });
     res.json({
@@ -785,7 +907,7 @@ function registerAdminRoutes(app, deps) {
   });
 
   app.get("/api/admin/backups/:name/download", (req, res) => {
-    const session = requireAdminSession(req, res);
+    const session = requireAdminSession(req, res, "backupsWrite");
     if (!session) return;
     const name = path.basename(String(req.params.name || ""));
     if (!/^birdx-backup-\d{8}-\d{6}\.db$/.test(name)) {
@@ -793,12 +915,12 @@ function registerAdminRoutes(app, deps) {
     }
     const filePath = path.join(backupDir, name);
     if (!fs.existsSync(filePath)) return res.status(404).json({ error: "Backup not found." });
-    writeAuditLog(session, "backup.download", "backup", name, {});
+    writeAuditLog(req, session, "backup.download", "backup", name, {});
     return res.download(filePath, name);
   });
 
   app.delete("/api/admin/backups/:name", (req, res) => {
-    const session = requireAdminSession(req, res);
+    const session = requireAdminSession(req, res, "backupsWrite");
     if (!session) return;
     const name = path.basename(String(req.params.name || ""));
     if (!/^birdx-backup-\d{8}-\d{6}\.db$/.test(name)) {
@@ -806,13 +928,14 @@ function registerAdminRoutes(app, deps) {
     }
     const filePath = path.join(backupDir, name);
     if (!fs.existsSync(filePath)) return res.status(404).json({ error: "Backup not found." });
+    if (!requireAdminPassword(req, res, session)) return;
     fs.unlinkSync(filePath);
-    writeAuditLog(session, "backup.delete", "backup", name, {});
+    writeAuditLog(req, session, "backup.delete", "backup", name, {});
     res.json({ ok: true, backups: listBackupFiles() });
   });
 
   app.get("/api/admin/settings", (req, res) => {
-    const session = requireAdminSession(req, res);
+    const session = requireAdminSession(req, res, "settingsRead");
     if (!session) return;
 
     let dbInfo = {};
