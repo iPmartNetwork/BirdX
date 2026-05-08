@@ -6,7 +6,7 @@ Repository: https://github.com/iPmartNetwork/BirdX
 
 ## Version
 
-Current release: `2.0.0`
+Current release: `2.1.0`
 
 ## Highlights
 
