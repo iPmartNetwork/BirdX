@@ -3,7 +3,28 @@
 All notable changes to BirdX are documented in this file.
 
 
-# v2.2.0 - 2026-05-08
+## v2.3.0 - 2026-05-09
+
+### Added
+
+- Added multi-level admin roles: owner, admin, moderator, support, and user.
+- Added permission checks for sensitive admin API routes.
+- Added admin password re-authentication before role changes, bans, password resets, session revokes, destructive deletes, and backup operations.
+- Added session IP address and user-agent tracking for new logins.
+- Added audit log IP address, user-agent, and success/failure tracking.
+- Added active session device/network details in the admin user detail drawer.
+
+### Changed
+
+- Promoted `ADMIN_USERNAMES` bootstrap accounts to owner-level access.
+- Hardened Admin Panel actions so the UI sends password confirmation with sensitive requests.
+- Updated Admin Panel role filters and role selectors for the expanded role model.
+
+### Fixed
+
+- Fixed a remaining Admin Panel 500 risk by including `ACCOUNT_CREATION` in the admin settings route dependencies.
+
+## v2.2.0 - 2026-05-08
 
 ### Added
 
