@@ -8,7 +8,7 @@ Orginal Repository: https://github.com/bllackbull/Songbird
 
 ## Version
 
-Current release: `2.1.0`
+Current release: `2.2.0`
 
 ## Highlights
 
