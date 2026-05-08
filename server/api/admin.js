@@ -30,6 +30,7 @@ function registerAdminRoutes(app, deps) {
     avatarUploadRootDir,
     fs,
     path,
+    projectRootDir,
     emitChatEvent,
     emitSseEvent,
     ADMIN_USERNAMES = [],
@@ -87,6 +88,21 @@ function registerAdminRoutes(app, deps) {
   };
 
   const toInt = (value) => Number.parseInt(String(value || "0"), 10) || 0;
+  const resolvePagination = (query = {}) => {
+    const page = Math.max(1, toInt(query.page) || 1);
+    const pageSize = Math.max(10, Math.min(100, toInt(query.pageSize) || 25));
+    return { page, pageSize, offset: (page - 1) * pageSize };
+  };
+  const resolveSort = (value, allowed, fallback) => {
+    const key = String(value || "").trim();
+    return allowed[key] || fallback;
+  };
+  const createPaginationPayload = (total, page, pageSize) => ({
+    total: Number(total || 0),
+    page,
+    pageSize,
+    totalPages: Math.max(1, Math.ceil(Number(total || 0) / pageSize)),
+  });
   const toBytesLabel = (bytes) => {
     const value = Math.max(0, Number(bytes || 0));
     if (value >= 1024 * 1024 * 1024) return `${(value / (1024 * 1024 * 1024)).toFixed(2)} GB`;
@@ -97,6 +113,33 @@ function registerAdminRoutes(app, deps) {
 
   const countRoleAdmins = () =>
     Number(adminGetRow("SELECT COUNT(*) AS count FROM users WHERE role = 'admin'")?.count || 0);
+
+  const backupDir = path.join(projectRootDir, "data", "backups");
+  const dbFilePath = path.join(projectRootDir, "data", "songbird.db");
+
+  const ensureBackupDir = () => {
+    if (!fs.existsSync(backupDir)) {
+      fs.mkdirSync(backupDir, { recursive: true });
+    }
+  };
+
+  const listBackupFiles = () => {
+    ensureBackupDir();
+    return fs
+      .readdirSync(backupDir)
+      .filter((name) => /^birdx-backup-\d{8}-\d{6}\.db$/.test(name))
+      .map((name) => {
+        const fullPath = path.join(backupDir, name);
+        const stat = fs.statSync(fullPath);
+        return {
+          name,
+          sizeBytes: stat.size,
+          sizeLabel: toBytesLabel(stat.size),
+          createdAt: stat.birthtime?.toISOString?.() || stat.mtime?.toISOString?.() || "",
+        };
+      })
+      .sort((a, b) => String(b.name).localeCompare(String(a.name)));
+  };
 
   app.get("/api/admin/me", (req, res) => {
     const session = requireAdminSession(req, res);
@@ -177,13 +220,44 @@ function registerAdminRoutes(app, deps) {
     const session = requireAdminSession(req, res);
     if (!session) return;
 
+    const { page, pageSize, offset } = resolvePagination(req.query);
     const query = String(req.query?.query || "").trim();
+    const role = String(req.query?.role || "").trim().toLowerCase();
+    const status = String(req.query?.status || "").trim().toLowerCase();
     const params = [];
-    let where = "";
+    const where = [];
     if (query) {
-      where = "WHERE users.username LIKE ? OR users.nickname LIKE ?";
+      where.push("(users.username LIKE ? OR users.nickname LIKE ?)");
       params.push(`%${query}%`, `%${query}%`);
     }
+    if (role === "admin" || role === "user") {
+      where.push("users.role = ?");
+      params.push(role);
+    }
+    if (status === "banned") {
+      where.push("COALESCE(users.banned, 0) = 1");
+    } else if (status === "active") {
+      where.push("COALESCE(users.banned, 0) = 0");
+    } else if (status === "recent") {
+      where.push("julianday('now') - julianday(users.last_seen) <= (15.0 / 1440.0)");
+    }
+    const whereSql = where.length ? `WHERE ${where.join(" AND ")}` : "";
+    const sortSql = resolveSort(
+      req.query?.sort,
+      {
+        newest: "datetime(users.created_at) DESC, users.id DESC",
+        username: "users.username COLLATE NOCASE ASC",
+        messages: "message_count DESC, users.id DESC",
+        chats: "chat_count DESC, users.id DESC",
+        last_seen: "datetime(users.last_seen) DESC, users.id DESC",
+      },
+      "datetime(users.created_at) DESC, users.id DESC",
+    );
+
+    const total = adminGetRow(
+      `SELECT COUNT(*) AS total FROM users ${whereSql}`,
+      params,
+    )?.total;
 
     const users = adminGetAll(
       `
@@ -195,12 +269,12 @@ function registerAdminRoutes(app, deps) {
         FROM users
         LEFT JOIN chat_members ON chat_members.user_id = users.id
         LEFT JOIN chat_messages ON chat_messages.user_id = users.id
-        ${where}
+        ${whereSql}
         GROUP BY users.id
-        ORDER BY datetime(users.created_at) DESC, users.id DESC
-        LIMIT 200
+        ORDER BY ${sortSql}
+        LIMIT ? OFFSET ?
       `,
-      params,
+      [...params, pageSize, offset],
     ).map((user) => ({
       ...user,
       avatar_url: ensureAvatarExists?.(user.id, user.avatar_url) || null,
@@ -211,7 +285,101 @@ function registerAdminRoutes(app, deps) {
       message_count: Number(user.message_count || 0),
     }));
 
-    res.json({ ok: true, users });
+    res.json({
+      ok: true,
+      users,
+      pagination: createPaginationPayload(total, page, pageSize),
+    });
+  });
+
+  app.get("/api/admin/users/:id", (req, res) => {
+    const session = requireAdminSession(req, res);
+    if (!session) return;
+
+    const userId = toInt(req.params.id);
+    const user = userId
+      ? adminGetRow(
+          `SELECT id, username, nickname, avatar_url, color, status, banned, role, created_at, last_seen
+           FROM users
+           WHERE id = ?`,
+          [userId],
+        )
+      : null;
+    if (!user?.id) return res.status(404).json({ error: "User not found." });
+
+    const stats = adminGetRow(
+      `
+        SELECT
+          (SELECT COUNT(*) FROM chat_messages WHERE user_id = ?) AS messages,
+          (SELECT COUNT(*) FROM chat_members WHERE user_id = ?) AS chats,
+          (SELECT COUNT(*) FROM sessions WHERE user_id = ?) AS sessions,
+          (SELECT COUNT(*) FROM chat_message_files cmf
+             JOIN chat_messages cm ON cm.id = cmf.message_id
+             WHERE cm.user_id = ?) AS files,
+          (SELECT COALESCE(SUM(cmf.size_bytes), 0) FROM chat_message_files cmf
+             JOIN chat_messages cm ON cm.id = cmf.message_id
+             WHERE cm.user_id = ?) AS storageBytes
+      `,
+      [userId, userId, userId, userId, userId],
+    );
+    const sessions = adminGetAll(
+      `SELECT id, created_at, last_seen
+       FROM sessions
+       WHERE user_id = ?
+       ORDER BY datetime(last_seen) DESC, id DESC`,
+      [userId],
+    );
+    const chats = adminGetAll(
+      `
+        SELECT chats.id, chats.name, chats.type, chats.group_username, chats.created_at, chat_members.role,
+               COUNT(chat_messages.id) AS message_count
+        FROM chat_members
+        JOIN chats ON chats.id = chat_members.chat_id
+        LEFT JOIN chat_messages ON chat_messages.chat_id = chats.id
+        WHERE chat_members.user_id = ?
+        GROUP BY chats.id
+        ORDER BY datetime(chats.created_at) DESC, chats.id DESC
+        LIMIT 20
+      `,
+      [userId],
+    );
+    const files = adminGetAll(
+      `
+        SELECT cmf.id, cmf.original_name, cmf.stored_name, cmf.mime_type, cmf.size_bytes, cmf.created_at
+        FROM chat_message_files cmf
+        JOIN chat_messages cm ON cm.id = cmf.message_id
+        WHERE cm.user_id = ?
+        ORDER BY datetime(cmf.created_at) DESC, cmf.id DESC
+        LIMIT 20
+      `,
+      [userId],
+    ).map((file) => ({
+      ...file,
+      size_bytes: Number(file.size_bytes || 0),
+      size_label: toBytesLabel(file.size_bytes || 0),
+    }));
+
+    res.json({
+      ok: true,
+      user: {
+        ...user,
+        avatar_url: ensureAvatarExists?.(user.id, user.avatar_url) || null,
+        banned: Boolean(Number(user.banned || 0)),
+        role: normalizeAdminRole(user.role),
+        envAdmin: adminUsernameSet.has(String(user.username || "").toLowerCase()),
+      },
+      stats: {
+        messages: Number(stats?.messages || 0),
+        chats: Number(stats?.chats || 0),
+        sessions: Number(stats?.sessions || 0),
+        files: Number(stats?.files || 0),
+        storageBytes: Number(stats?.storageBytes || 0),
+        storageLabel: toBytesLabel(stats?.storageBytes || 0),
+      },
+      sessions,
+      chats,
+      files,
+    });
   });
 
   app.patch("/api/admin/users/:id", (req, res) => {
@@ -275,6 +443,51 @@ function registerAdminRoutes(app, deps) {
     res.json({ ok: true });
   });
 
+  app.delete("/api/admin/users/:id/sessions", (req, res) => {
+    const session = requireAdminSession(req, res);
+    if (!session) return;
+
+    const userId = toInt(req.params.id);
+    const target = userId ? adminGetRow("SELECT id, username FROM users WHERE id = ?", [userId]) : null;
+    if (!target?.id) return res.status(404).json({ error: "User not found." });
+    if (Number(userId) === Number(session.id)) {
+      return res.status(400).json({ error: "Use logout to end your own current session." });
+    }
+    const removed = Number(adminGetRow("SELECT COUNT(*) AS count FROM sessions WHERE user_id = ?", [userId])?.count || 0);
+    adminRun("DELETE FROM sessions WHERE user_id = ?", [userId]);
+    adminSave();
+    writeAuditLog(session, "user.sessions.delete_all", "user", userId, {
+      username: target.username,
+      removed,
+    });
+    res.json({ ok: true, removed });
+  });
+
+  app.delete("/api/admin/users/:id/sessions/:sessionId", (req, res) => {
+    const session = requireAdminSession(req, res);
+    if (!session) return;
+
+    const userId = toInt(req.params.id);
+    const sessionId = toInt(req.params.sessionId);
+    const target = userId ? adminGetRow("SELECT id, username FROM users WHERE id = ?", [userId]) : null;
+    if (!target?.id) return res.status(404).json({ error: "User not found." });
+    if (Number(sessionId) === Number(session.session_id)) {
+      return res.status(400).json({ error: "You cannot revoke your current admin session here." });
+    }
+    const existing = adminGetRow("SELECT id FROM sessions WHERE id = ? AND user_id = ?", [
+      sessionId,
+      userId,
+    ]);
+    if (!existing?.id) return res.status(404).json({ error: "Session not found." });
+    adminRun("DELETE FROM sessions WHERE id = ? AND user_id = ?", [sessionId, userId]);
+    adminSave();
+    writeAuditLog(session, "user.session.delete", "session", sessionId, {
+      userId,
+      username: target.username,
+    });
+    res.json({ ok: true });
+  });
+
   app.delete("/api/admin/users/:id", (req, res) => {
     const session = requireAdminSession(req, res);
     if (!session) return;
@@ -299,6 +512,7 @@ function registerAdminRoutes(app, deps) {
     const session = requireAdminSession(req, res);
     if (!session) return;
 
+    const { page, pageSize, offset } = resolvePagination(req.query);
     const query = String(req.query?.query || "").trim();
     const type = String(req.query?.type || "").trim().toLowerCase();
     const where = [];
@@ -312,6 +526,20 @@ function registerAdminRoutes(app, deps) {
       params.push(type);
     }
     const whereSql = where.length ? `WHERE ${where.join(" AND ")}` : "";
+    const total = adminGetRow(
+      `SELECT COUNT(*) AS total FROM chats ${whereSql}`,
+      params,
+    )?.total;
+    const sortSql = resolveSort(
+      req.query?.sort,
+      {
+        newest: "datetime(chats.created_at) DESC, chats.id DESC",
+        members: "member_count DESC, chats.id DESC",
+        messages: "message_count DESC, chats.id DESC",
+        name: "chats.name COLLATE NOCASE ASC",
+      },
+      "datetime(chats.created_at) DESC, chats.id DESC",
+    );
     const chats = adminGetAll(
       `
         SELECT
@@ -324,16 +552,20 @@ function registerAdminRoutes(app, deps) {
         LEFT JOIN chat_messages ON chat_messages.chat_id = chats.id
         ${whereSql}
         GROUP BY chats.id
-        ORDER BY datetime(chats.created_at) DESC, chats.id DESC
-        LIMIT 200
+        ORDER BY ${sortSql}
+        LIMIT ? OFFSET ?
       `,
-      params,
+      [...params, pageSize, offset],
     ).map((chat) => ({
       ...chat,
       member_count: Number(chat.member_count || 0),
       message_count: Number(chat.message_count || 0),
     }));
-    res.json({ ok: true, chats });
+    res.json({
+      ok: true,
+      chats,
+      pagination: createPaginationPayload(total, page, pageSize),
+    });
   });
 
   app.delete("/api/admin/chats/:id", (req, res) => {
@@ -353,6 +585,30 @@ function registerAdminRoutes(app, deps) {
     const session = requireAdminSession(req, res);
     if (!session) return;
 
+    const { page, pageSize, offset } = resolvePagination(req.query);
+    const query = String(req.query?.query || "").trim();
+    const kind = String(req.query?.kind || "").trim().toLowerCase();
+    const where = [];
+    const params = [];
+    if (query) {
+      where.push("(cmf.original_name LIKE ? OR cmf.stored_name LIKE ? OR users.username LIKE ?)");
+      params.push(`%${query}%`, `%${query}%`, `%${query}%`);
+    }
+    if (kind) {
+      where.push("(cmf.kind = ? OR cmf.mime_type LIKE ?)");
+      params.push(kind, `${kind}/%`);
+    }
+    const whereSql = where.length ? `WHERE ${where.join(" AND ")}` : "";
+    const total = adminGetRow(
+      `
+        SELECT COUNT(*) AS total
+        FROM chat_message_files cmf
+        LEFT JOIN chat_messages cm ON cm.id = cmf.message_id
+        LEFT JOIN users ON users.id = cm.user_id
+        ${whereSql}
+      `,
+      params,
+    )?.total;
     const files = adminGetAll(`
       SELECT
         cmf.id, cmf.message_id, cmf.kind, cmf.original_name, cmf.stored_name,
@@ -364,14 +620,19 @@ function registerAdminRoutes(app, deps) {
       LEFT JOIN chat_messages cm ON cm.id = cmf.message_id
       LEFT JOIN users ON users.id = cm.user_id
       LEFT JOIN chats ON chats.id = cm.chat_id
+      ${whereSql}
       ORDER BY datetime(cmf.created_at) DESC, cmf.id DESC
-      LIMIT 200
-    `).map((file) => ({
+      LIMIT ? OFFSET ?
+    `, [...params, pageSize, offset]).map((file) => ({
       ...file,
       size_bytes: Number(file.size_bytes || 0),
       size_label: toBytesLabel(file.size_bytes || 0),
     }));
-    res.json({ ok: true, files });
+    res.json({
+      ok: true,
+      files,
+      pagination: createPaginationPayload(total, page, pageSize),
+    });
   });
 
   app.delete("/api/admin/files/:id", (req, res) => {
@@ -397,12 +658,37 @@ function registerAdminRoutes(app, deps) {
     const session = requireAdminSession(req, res);
     if (!session) return;
 
+    const { page, pageSize, offset } = resolvePagination(req.query);
+    const action = String(req.query?.action || "").trim();
+    const actor = String(req.query?.actor || "").trim();
+    const targetType = String(req.query?.targetType || "").trim();
+    const where = [];
+    const params = [];
+    if (action) {
+      where.push("action LIKE ?");
+      params.push(`%${action}%`);
+    }
+    if (actor) {
+      where.push("actor_username LIKE ?");
+      params.push(`%${actor}%`);
+    }
+    if (targetType) {
+      where.push("target_type = ?");
+      params.push(targetType);
+    }
+    const whereSql = where.length ? `WHERE ${where.join(" AND ")}` : "";
+    const total = adminGetRow(
+      `SELECT COUNT(*) AS total FROM admin_audit_logs ${whereSql}`,
+      params,
+    )?.total;
+
     const logs = adminGetAll(`
       SELECT id, actor_user_id, actor_username, action, target_type, target_id, details, created_at
       FROM admin_audit_logs
+      ${whereSql}
       ORDER BY datetime(created_at) DESC, id DESC
-      LIMIT 200
-    `).map((log) => {
+      LIMIT ? OFFSET ?
+    `, [...params, pageSize, offset]).map((log) => {
       let details = {};
       try {
         details = log.details ? JSON.parse(log.details) : {};
@@ -411,7 +697,76 @@ function registerAdminRoutes(app, deps) {
       }
       return { ...log, details };
     });
-    res.json({ ok: true, logs });
+    res.json({
+      ok: true,
+      logs,
+      pagination: createPaginationPayload(total, page, pageSize),
+    });
+  });
+
+  app.get("/api/admin/backups", (req, res) => {
+    const session = requireAdminSession(req, res);
+    if (!session) return;
+    res.json({ ok: true, backups: listBackupFiles() });
+  });
+
+  app.post("/api/admin/backups", (req, res) => {
+    const session = requireAdminSession(req, res);
+    if (!session) return;
+    if (!fs.existsSync(dbFilePath)) {
+      return res.status(404).json({ error: "Database file was not found." });
+    }
+    ensureBackupDir();
+    adminSave();
+    const stamp = new Date()
+      .toISOString()
+      .replace(/[-:]/g, "")
+      .replace("T", "-")
+      .slice(0, 15);
+    const name = `birdx-backup-${stamp}.db`;
+    const targetPath = path.join(backupDir, name);
+    fs.copyFileSync(dbFilePath, targetPath);
+    const stat = fs.statSync(targetPath);
+    writeAuditLog(session, "backup.create", "backup", name, {
+      sizeBytes: stat.size,
+    });
+    res.json({
+      ok: true,
+      backup: {
+        name,
+        sizeBytes: stat.size,
+        sizeLabel: toBytesLabel(stat.size),
+        createdAt: stat.birthtime?.toISOString?.() || stat.mtime?.toISOString?.() || "",
+      },
+      backups: listBackupFiles(),
+    });
+  });
+
+  app.get("/api/admin/backups/:name/download", (req, res) => {
+    const session = requireAdminSession(req, res);
+    if (!session) return;
+    const name = path.basename(String(req.params.name || ""));
+    if (!/^birdx-backup-\d{8}-\d{6}\.db$/.test(name)) {
+      return res.status(400).json({ error: "Invalid backup name." });
+    }
+    const filePath = path.join(backupDir, name);
+    if (!fs.existsSync(filePath)) return res.status(404).json({ error: "Backup not found." });
+    writeAuditLog(session, "backup.download", "backup", name, {});
+    return res.download(filePath, name);
+  });
+
+  app.delete("/api/admin/backups/:name", (req, res) => {
+    const session = requireAdminSession(req, res);
+    if (!session) return;
+    const name = path.basename(String(req.params.name || ""));
+    if (!/^birdx-backup-\d{8}-\d{6}\.db$/.test(name)) {
+      return res.status(400).json({ error: "Invalid backup name." });
+    }
+    const filePath = path.join(backupDir, name);
+    if (!fs.existsSync(filePath)) return res.status(404).json({ error: "Backup not found." });
+    fs.unlinkSync(filePath);
+    writeAuditLog(session, "backup.delete", "backup", name, {});
+    res.json({ ok: true, backups: listBackupFiles() });
   });
 
   app.get("/api/admin/settings", (req, res) => {
