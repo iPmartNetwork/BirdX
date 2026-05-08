@@ -364,6 +364,37 @@ const {
   requireSessionUsernameMatch,
 } = sessionHelpers;
 
+function bootstrapEnvAdmins() {
+  if (!ADMIN_USERNAMES.length) return;
+  try {
+    const placeholders = ADMIN_USERNAMES.map(() => "?").join(", ");
+    const rows = adminGetAll(
+      `SELECT id, username FROM users WHERE lower(username) IN (${placeholders})`,
+      ADMIN_USERNAMES,
+    );
+    if (!rows.length) {
+      console.warn(
+        "[admin] ADMIN_USERNAMES is set, but no matching users were found:",
+        ADMIN_USERNAMES.join(", "),
+      );
+      return;
+    }
+    adminRun(
+      `UPDATE users
+       SET role = 'admin', banned = 0
+       WHERE lower(username) IN (${placeholders})`,
+      ADMIN_USERNAMES,
+    );
+    adminSave();
+    console.log(
+      "[admin] Bootstrapped admin users:",
+      rows.map((row) => row.username).join(", "),
+    );
+  } catch (error) {
+    console.warn("[admin] Unable to bootstrap ADMIN_USERNAMES:", String(error?.message || error));
+  }
+}
+
 function backfillStorageEncryption() {
   if (!storageEncryption.isEnabled()) return;
 
@@ -774,6 +805,7 @@ if (MESSAGE_TEXT_RETENTION_DAYS > 0) {
   }
 }
 
+bootstrapEnvAdmins();
 backfillStorageEncryption();
 
 const httpServer = createServer(app);
