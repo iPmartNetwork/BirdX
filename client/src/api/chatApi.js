@@ -76,53 +76,48 @@ export const fetchAdminUsers = (params = {}) =>
 export const fetchAdminUserDetail = (userId) =>
   apiFetch(`${API_BASE}/api/admin/users/${encodeURIComponent(userId)}`);
 
+const adminJsonOptions = (method, payload = {}) => ({
+  method,
+  headers: { "Content-Type": "application/json" },
+  body: JSON.stringify(payload || {}),
+});
+
 export const updateAdminUser = (userId, payload) =>
-  apiFetch(`${API_BASE}/api/admin/users/${encodeURIComponent(userId)}`, {
-    method: "PATCH",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(payload),
-  });
+  apiFetch(`${API_BASE}/api/admin/users/${encodeURIComponent(userId)}`, adminJsonOptions("PATCH", payload));
 
-export const resetAdminUserPassword = (userId, password) =>
-  apiFetch(`${API_BASE}/api/admin/users/${encodeURIComponent(userId)}/reset-password`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ password }),
-  });
+export const resetAdminUserPassword = (userId, payload) => {
+  const body = typeof payload === "string" ? { password: payload } : payload;
+  return apiFetch(
+    `${API_BASE}/api/admin/users/${encodeURIComponent(userId)}/reset-password`,
+    adminJsonOptions("POST", body),
+  );
+};
 
-export const deleteAdminUser = (userId) =>
-  apiFetch(`${API_BASE}/api/admin/users/${encodeURIComponent(userId)}`, {
-    method: "DELETE",
-  });
+export const deleteAdminUser = (userId, payload = {}) =>
+  apiFetch(`${API_BASE}/api/admin/users/${encodeURIComponent(userId)}`, adminJsonOptions("DELETE", payload));
 
-export const deleteAdminUserSession = (userId, sessionId) =>
+export const deleteAdminUserSession = (userId, sessionId, payload = {}) =>
   apiFetch(
     `${API_BASE}/api/admin/users/${encodeURIComponent(userId)}/sessions/${encodeURIComponent(
       sessionId,
     )}`,
-    { method: "DELETE" },
+    adminJsonOptions("DELETE", payload),
   );
 
-export const deleteAdminUserSessions = (userId) =>
-  apiFetch(`${API_BASE}/api/admin/users/${encodeURIComponent(userId)}/sessions`, {
-    method: "DELETE",
-  });
+export const deleteAdminUserSessions = (userId, payload = {}) =>
+  apiFetch(`${API_BASE}/api/admin/users/${encodeURIComponent(userId)}/sessions`, adminJsonOptions("DELETE", payload));
 
 export const fetchAdminChats = (params = {}) =>
   apiFetch(`${API_BASE}/api/admin/chats${buildAdminQuery(params)}`);
 
-export const deleteAdminChat = (chatId) =>
-  apiFetch(`${API_BASE}/api/admin/chats/${encodeURIComponent(chatId)}`, {
-    method: "DELETE",
-  });
+export const deleteAdminChat = (chatId, payload = {}) =>
+  apiFetch(`${API_BASE}/api/admin/chats/${encodeURIComponent(chatId)}`, adminJsonOptions("DELETE", payload));
 
 export const fetchAdminFiles = (params = {}) =>
   apiFetch(`${API_BASE}/api/admin/files${buildAdminQuery(params)}`);
 
-export const deleteAdminFile = (fileId) =>
-  apiFetch(`${API_BASE}/api/admin/files/${encodeURIComponent(fileId)}`, {
-    method: "DELETE",
-  });
+export const deleteAdminFile = (fileId, payload = {}) =>
+  apiFetch(`${API_BASE}/api/admin/files/${encodeURIComponent(fileId)}`, adminJsonOptions("DELETE", payload));
 
 export const fetchAdminAuditLogs = (params = {}) =>
   apiFetch(`${API_BASE}/api/admin/audit-logs${buildAdminQuery(params)}`);
@@ -131,15 +126,11 @@ export const fetchAdminSettings = () => apiFetch(`${API_BASE}/api/admin/settings
 
 export const fetchAdminBackups = () => apiFetch(`${API_BASE}/api/admin/backups`);
 
-export const createAdminBackup = () =>
-  apiFetch(`${API_BASE}/api/admin/backups`, {
-    method: "POST",
-  });
+export const createAdminBackup = (payload = {}) =>
+  apiFetch(`${API_BASE}/api/admin/backups`, adminJsonOptions("POST", payload));
 
-export const deleteAdminBackup = (name) =>
-  apiFetch(`${API_BASE}/api/admin/backups/${encodeURIComponent(name)}`, {
-    method: "DELETE",
-  });
+export const deleteAdminBackup = (name, payload = {}) =>
+  apiFetch(`${API_BASE}/api/admin/backups/${encodeURIComponent(name)}`, adminJsonOptions("DELETE", payload));
 
 export const getAdminBackupDownloadUrl = (name) =>
   `${API_BASE}/api/admin/backups/${encodeURIComponent(name)}/download`;
