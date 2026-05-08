@@ -1,102 +1,225 @@
 # BirdX
 
-🔥 Modern self-hosted chat & file sharing platform
+[![Version](https://img.shields.io/badge/version-2.2.0-10b981)](./VERSION)
+[![License](https://img.shields.io/badge/license-MIT-blue)](./LICENSE)
+[![Node.js](https://img.shields.io/badge/node-%3E%3D24.0.0-339933)](https://nodejs.org/)
+
+BirdX is a modern self-hosted chat, voice call, file sharing, and administration platform for private communities and teams. It is built with React, Vite, Express, Socket.IO, WebRTC, Web Push, and PWA support.
 
 Repository: https://github.com/iPmartNetwork/BirdX
 
-Orginal Repository: https://github.com/bllackbull/Songbird
+BirdX is based on the original Songbird project:
 
-## Version
+```text
+https://github.com/bllackbull/Songbird
+```
 
-Current release: `2.2.0`
+## Current Release
 
-## Highlights
+`2.2.0`
+
+This release focuses on the advanced Admin Panel, production operations, user/session control, database backups, voice calls, Android PWA reliability, and message reactions.
+
+## What BirdX Includes
+
+### Messaging
 
 - Real-time direct messages, groups, channels, and saved messages
-- WebRTC voice calls with Socket.IO signaling
-- TURN/STUN configuration for reliable audio on mobile and restricted networks
-- Incoming call screen with ringtone while the app is open
-- Push notification for incoming calls when the PWA is installed or running in the background
-- Message reactions with live updates
+- Message edit, delete, forward, reply, and read receipts
+- Message reactions with live server-side persistence
+- Typing indicators and user presence
+- Chat search, discovery, public groups/channels, and invite links
 - Voice messages with waveform support
-- File sharing with size and retention controls
-- Read receipts, typing indicators, presence, mute controls, and chat search
-- Progressive Web App install support for Android, iOS, and desktop browsers
-- Service worker cache management and update recovery
-- Dark mode and responsive mobile UI
+- File sharing with size, count, retention, and transcoding controls
+
+### Voice Calls
+
+- WebRTC voice calls for direct messages
+- Socket.IO signaling for call lifecycle, SDP, and ICE candidates
+- Professional incoming/outgoing call screen
+- Mute, audio retry, call duration, accept, reject, and end controls
+- Incoming call ringtone while the app is open
+- Push notifications for incoming calls in PWA/background mode
+- TURN/STUN configuration for reliable audio on mobile carriers and restricted networks
+
+### PWA
+
+- Installable Progressive Web App
+- Android install fallback flow
+- iOS and desktop installation guidance
+- Service worker cache management
+- App shell update recovery
+- Web Push notifications with VAPID support
+
+### Admin Panel
+
+BirdX includes a real admin workspace at:
+
+```text
+/admin
+```
+
+Admin capabilities:
+
+- Admin/user roles
+- Bootstrap admins with `ADMIN_USERNAMES`
+- Dashboard metrics for users, chats, messages, files, sessions, and storage
+- User management with role changes, ban/unban, password reset, and deletion
+- User detail drawer with profile metadata, stats, chats, files, and active sessions
+- Session management with single-session revoke and logout-all
+- Chat management with search, filtering, sorting, pagination, and deletion
+- File management with owner, type, size, pagination, and deletion
+- Audit logs with filters by action, actor, and target type
+- Maintenance tab for database backup creation, download, listing, and deletion
+- Professional in-app confirmation modals for sensitive actions
+
+## Tech Stack
+
+- React 19
+- Vite 7
+- Tailwind CSS
+- Express 4
+- Socket.IO 4
+- WebRTC
+- Web Push
+- sql.js
+- PWA manifest and service worker
 
 ## Requirements
 
 - Node.js `24+`
 - npm `11+`
 - HTTPS in production
-- A public domain for production deployment
-- A TURN server such as `coturn` for reliable voice calls across strict NAT/mobile networks
+- A public domain for PWA, push notifications, and WebRTC permissions
+- A TURN server such as `coturn` for reliable voice calls across strict NAT and mobile networks
 
 ## Quick Start
 
-## Install (One-line)
-bash <(curl -fsSL https://raw.githubusercontent.com/iPmartNetwork/BirdX/master/install.sh)
-
-## Manual Install
-git clone https://github.com/iPmartNetwork/BirdX 
-
-cd BirdX 
-
-npm install 
-
+```bash
+git clone https://github.com/iPmartNetwork/BirdX.git
+cd BirdX
+npm install
 npm run build
+npm start
+```
 
-## Screenshots
-(تصاویر UI)
+The production server serves the built client from the Express backend.
 
-## Environment
+## Development
 
-Create a `.env` file in the project root. Use `.env.example` as a starting point.
+```bash
+npm install
+npm run dev
+```
 
-Important production values:
+The root `dev` script starts the client and server together.
+
+## One-Line Install
+
+If you use the bundled install script:
+
+```bash
+bash <(curl -fsSL https://raw.githubusercontent.com/iPmartNetwork/BirdX/master/scripts/install.sh)
+```
+
+Review the script before running it on a production server.
+
+## Environment Configuration
+
+Create a `.env` file in the project root. Use `.env.example` as the template.
+
+Recommended production baseline:
 
 ```env
+# Server
 SERVER_PORT=5174
 CLIENT_PORT=443
+
+# App
 APP_ENV=production
 APP_DEBUG=false
-ACCOUNT_CREATION=true
 
+# Auth
+ACCOUNT_CREATION=true
+ADMIN_USERNAMES=ipmart
+
+# File Upload
 FILE_UPLOAD=true
 FILE_UPLOAD_MAX_SIZE=26214400
 FILE_UPLOAD_MAX_TOTAL_SIZE=78643200
 FILE_UPLOAD_MAX_FILES=10
+FILE_UPLOAD_TRANSCODE_VIDEOS=true
 
+# Message Limits
 MESSAGE_MAX_CHARS=4000
-MESSAGE_FILE_RETENTION=0
+
+# Retention
+MESSAGE_FILE_RETENTION=7
 MESSAGE_TEXT_RETENTION=0
 
+# Chat Performance
 CHAT_MESSAGE_FETCH_LIMIT=300
 CHAT_MESSAGE_PAGE_SIZE=60
 CHAT_LIST_REFRESH_INTERVAL=20000
 CHAT_PRESENCE_PING_INTERVAL=5000
 
-APP_TURN_URLS=turn:turn.domain.com:3478?transport=udp turn:turn.domain.com:3478?transport=tcp
+# Voice Calls / TURN
+APP_TURN_URLS=turn:turn.example.com:3478?transport=udp turn:turn.example.com:3478?transport=tcp
 APP_TURN_USERNAME=birdx
 APP_TURN_CREDENTIAL=your_turn_password
+
+# Security
+STORAGE_ENCRYPTION_KEY=
+VAPID_PUBLIC_KEY=
+VAPID_PRIVATE_KEY=
+VAPID_SUBJECT=mailto:admin@example.com
 ```
 
-Do not change `STORAGE_ENCRYPTION_KEY` after first run. It protects stored application data.
+Important:
 
-## Voice Calls
+- Do not change `STORAGE_ENCRYPTION_KEY` after first run.
+- Use `.env` in production, not `.env.example`.
+- Keep `.env` out of Git.
+- Set `ADMIN_USERNAMES` to the username that should become the first admin.
+- Restart the server after changing `.env`.
 
-BirdX voice calls use WebRTC for peer audio and Socket.IO for signaling.
+## Admin Setup
 
-For best call reliability, configure a TURN server:
+To make an existing user an admin, add the username to `.env`:
 
 ```env
-APP_TURN_URLS=turn:turn.domain.com:3478?transport=udp turn:turn.domain.com:3478?transport=tcp
+ADMIN_USERNAMES=admin
+```
+
+Then restart the server. On startup, BirdX will bootstrap matching users as admins and unban them if needed.
+
+You can add multiple bootstrap admins:
+
+```env
+ADMIN_USERNAMES=admin,admin2,admin3
+```
+
+After login, open:
+
+```text
+https://your-domain.com/admin
+```
+
+Admin users also see an Admin Panel entry inside the settings menu.
+
+## Voice Call Reliability
+
+BirdX has built-in public STUN fallback, but production voice calls should use TURN.
+
+Example:
+
+```env
+APP_TURN_URLS=turn:turn.example.com:3478?transport=udp turn:turn.example.com:3478?transport=tcp
 APP_TURN_USERNAME=birdx
 APP_TURN_CREDENTIAL=your_turn_password
 ```
 
-Recommended TURN ports:
+Recommended TURN firewall ports:
 
 ```text
 3478 TCP
@@ -104,35 +227,115 @@ Recommended TURN ports:
 49152-65535 UDP
 ```
 
-Without TURN, WebRTC may work on normal networks but can fail on some mobile carriers, corporate networks, or strict NAT connections.
+Without TURN, calls may work on normal networks but fail on some mobile carriers, corporate Wi-Fi, or strict NAT connections.
 
-## PWA And Notifications
+## PWA And Push Notifications
 
-BirdX includes a web app manifest and service worker for installable PWA behavior.
+For installable Android/iOS/Desktop PWA behavior:
 
-For Android installation:
+- Serve BirdX over HTTPS
+- Keep `/manifest.webmanifest` available
+- Keep `/sw.js` available
+- Configure valid VAPID keys
+- Ask users to enable notifications
+- Rebuild and redeploy the client after changing client-side env values
 
-- Serve the app over HTTPS
-- Keep the manifest available at `/manifest.webmanifest`
-- Keep the service worker available at `/sw.js`
-- Make sure notification permission is granted by the user
+Incoming calls use Web Push when the app is installed or running in the background. When the app is open, BirdX also displays the incoming call screen and plays an in-app ringtone when the browser allows audio playback.
 
-Incoming call notifications use Web Push. Configure valid VAPID keys in `.env`.
+## Database And Backups
 
-## Server Scripts
+BirdX stores application data under the local `data` directory. The Admin Panel Maintenance tab can create, list, download, and delete database backups.
 
-The server includes database helper scripts:
+Server-side helper scripts are also available:
 
 ```bash
 npm --prefix server run db:help
 npm --prefix server run db:backup
 npm --prefix server run db:restore
 npm --prefix server run db:migrate
+npm --prefix server run db:vacuum
 ```
+
+Always create a backup before upgrading production.
+
+## Build And Deploy
+
+Typical production flow:
+
+```bash
+git pull origin master
+npm install
+npm run build
+npm start
+```
+
+If you use a process manager:
+
+```bash
+pm2 restart all
+```
+
+or:
+
+```bash
+sudo systemctl restart birdx
+```
+
+## Upgrade Notes
+
+When upgrading from older BirdX versions:
+
+1. Back up the database.
+2. Pull the latest code.
+3. Update `.env` with new keys such as `ADMIN_USERNAMES` and TURN settings.
+4. Run `npm install`.
+5. Run `npm run build`.
+6. Restart the server.
+7. Log in with the bootstrap admin and open `/admin`.
+
+Database migrations run automatically at startup.
+
+## Repository Structure
+
+```text
+client/        React, Vite, PWA, UI components
+server/        Express API, Socket.IO, migrations, database helpers
+scripts/       Install and operational scripts
+data/          Runtime database, uploads, backups
+```
+
+## Roadmap
+
+Planned areas for future releases:
+
+- Fine-grained admin permissions
+- Admin 2FA
+- Advanced analytics charts
+- Call history and missed call records
+- Video calls
+- Group calls with SFU support
+- End-to-end encryption improvements
+
+## Credits
+
+BirdX is developed by iPmart Network and is based on the original open-source Songbird project:
+
+[https://github.com/bllackbull/Songbird](https://github.com/bllackbull/Songbird)
+
+Special thanks to Mr. Pouya Khalili for the original Songbird project and the foundation that made BirdX possible.
 
 ## Release Notes
 
 See [CHANGELOG.md](CHANGELOG.md).
+
+## Security Notes
+
+- Keep `.env` private.
+- Use HTTPS in production.
+- Configure TURN for reliable calls.
+- Keep backups protected.
+- Give admin access only to trusted users.
+- Rotate VAPID, TURN, and admin credentials if exposed.
 
 ## License
 
