@@ -815,7 +815,13 @@ function registerAdminRoutes(app, deps) {
     const session = requireAdminSession(req, res);
     if (!session) return;
 
-    const dbInfo = buildInspectSnapshot?.() || {};
+    let dbInfo = {};
+    try {
+      dbInfo = buildInspectSnapshot?.() || {};
+    } catch (error) {
+      console.warn("[admin] settings inspect failed:", String(error?.message || error));
+      dbInfo = {};
+    }
     res.json({
       ok: true,
       settings: {
