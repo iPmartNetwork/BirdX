@@ -381,7 +381,7 @@ function bootstrapEnvAdmins() {
     }
     adminRun(
       `UPDATE users
-       SET role = 'admin', banned = 0
+       SET role = 'owner', banned = 0
        WHERE lower(username) IN (${placeholders})`,
       ADMIN_USERNAMES,
     );
