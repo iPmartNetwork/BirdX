@@ -232,14 +232,14 @@ export function getCurrentSchemaVersion() {
 
 export function findUserByUsername(username) {
   return getRow(
-    "SELECT id, username, nickname, avatar_url, color, status, password_hash, banned FROM users WHERE username = ?",
+    "SELECT id, username, nickname, avatar_url, color, status, password_hash, banned, role FROM users WHERE username = ?",
     [username],
   );
 }
 
 export function findUserById(id) {
   return getRow(
-    "SELECT id, username, nickname, avatar_url, color, status, password_hash, banned FROM users WHERE id = ?",
+    "SELECT id, username, nickname, avatar_url, color, status, password_hash, banned, role FROM users WHERE id = ?",
     [id],
   );
 }
@@ -247,13 +247,13 @@ export function findUserById(id) {
 export function listUsers(excludeUsername) {
   if (excludeUsername) {
     return getAll(
-      "SELECT id, username, nickname, avatar_url, color, status FROM users WHERE username != ? ORDER BY username",
+      "SELECT id, username, nickname, avatar_url, color, status, banned, role FROM users WHERE username != ? ORDER BY username",
       [excludeUsername],
     );
   }
 
   return getAll(
-    "SELECT id, username, nickname, avatar_url, color, status, banned FROM users ORDER BY username",
+    "SELECT id, username, nickname, avatar_url, color, status, banned, role FROM users ORDER BY username",
   );
 }
 
@@ -262,13 +262,13 @@ export function searchUsers(query, excludeUsername) {
 
   if (excludeUsername) {
     return getAll(
-      "SELECT id, username, nickname, avatar_url, color, status, banned FROM users WHERE username != ? AND (username LIKE ? OR nickname LIKE ?) ORDER BY username",
+      "SELECT id, username, nickname, avatar_url, color, status, banned, role FROM users WHERE username != ? AND (username LIKE ? OR nickname LIKE ?) ORDER BY username",
       [excludeUsername, like, like],
     );
   }
 
   return getAll(
-    "SELECT id, username, nickname, avatar_url, color, status, banned FROM users WHERE username LIKE ? OR nickname LIKE ? ORDER BY username",
+    "SELECT id, username, nickname, avatar_url, color, status, banned, role FROM users WHERE username LIKE ? OR nickname LIKE ? ORDER BY username",
     [like, like],
   );
 }
@@ -1636,7 +1636,7 @@ export function getSession(token) {
   return getRow(
     `
     SELECT sessions.id AS session_id, sessions.token, users.id, users.username, users.nickname,
-           users.avatar_url, users.color, users.status, users.banned
+           users.avatar_url, users.color, users.status, users.banned, users.role
     FROM sessions
     JOIN users ON users.id = sessions.user_id
     WHERE sessions.token = ?
