@@ -13,8 +13,10 @@ const PWA_PERMISSIONS_PROMPT_KEY = 'birdx-pwa-permissions-prompt'
 const ROUTE_CHUNK_TELEMETRY_KEY = 'birdx-route-chunk-telemetry-v1'
 const CHUNK_RECOVERY_ATTEMPT_KEY = 'birdx-chunk-recovery-attempted'
 const loadAuthPage = () => import('./pages/AuthPage.jsx')
+const loadAdminPage = () => import('./pages/AdminPage.jsx')
 const loadChatPage = () => import('./pages/ChatPage.jsx')
 const loadInvitePage = () => import('./pages/InvitePage.jsx')
+const AdminPage = lazy(loadAdminPage)
 const AuthPage = lazy(loadAuthPage)
 const ChatPage = lazy(loadChatPage)
 const InvitePage = lazy(loadInvitePage)
@@ -61,6 +63,7 @@ function RouteLoadingFallback({ themeColor, onVisibleChange = null }) {
 function getRoute(pathname) {
   if (pathname === '/signup') return 'signup'
   if (pathname.startsWith('/invite/')) return 'invite'
+  if (pathname === '/admin') return 'admin'
   if (pathname === '/chat') return 'chat'
   return 'login'
 }
@@ -186,6 +189,8 @@ export default function App() {
       avatarUrl: data.avatarUrl || null,
       color: data.color || null,
       status: data.status || 'online',
+      role: data.role || 'user',
+      isAdmin: Boolean(data.isAdmin),
     }
   }
 
@@ -717,7 +722,7 @@ export default function App() {
       return
     }
 
-    if (!user && (route === 'chat' || route === 'invite')) {
+    if (!user && (route === 'chat' || route === 'invite' || route === 'admin')) {
       if (route === 'invite') {
         const nextPath = window.location.pathname
         if (nextPath.startsWith('/invite/')) {
@@ -775,6 +780,8 @@ export default function App() {
         avatarUrl: data.avatarUrl || null,
         color: data.color || null,
         status: data.status || 'online',
+        role: data.role || 'user',
+        isAdmin: Boolean(data.isAdmin),
       }
       const nextUser = await resolveSessionUserWithRetry(fallbackUser)
       setUser(nextUser)
@@ -992,6 +999,9 @@ export default function App() {
               )}
               {route === 'chat' && user ? (
                 <ChatPage user={user} setUser={setUser} isDark={isDark} setIsDark={setIsDark} toggleTheme={toggleTheme} />
+              ) : null}
+              {route === 'admin' && user ? (
+                <AdminPage user={user} isDark={isDark} onToggleTheme={toggleTheme} onNavigate={navigate} />
               ) : null}
               {route === 'invite' && user ? (
                 <InvitePage
