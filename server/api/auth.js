@@ -22,6 +22,22 @@ function registerAuthRoutes(app, deps) {
     getSessionFromRequest,
   } = deps;
 
+  const getRequestIp = (req) =>
+    String(
+      req.headers?.["x-forwarded-for"] ||
+        req.headers?.["x-real-ip"] ||
+        req.socket?.remoteAddress ||
+        req.ip ||
+        "",
+    )
+      .split(",")[0]
+      .trim();
+
+  const getSessionMetadata = (req) => ({
+    ipAddress: getRequestIp(req),
+    userAgent: String(req.headers?.["user-agent"] || "").slice(0, 500),
+  });
+
   app.post("/api/register", (req, res) => {
     if (!ACCOUNT_CREATION) {
       return res.status(403).json({ error: "Account creation is disabled." });
@@ -86,7 +102,7 @@ function registerAuthRoutes(app, deps) {
 
     const token = crypto.randomBytes(24).toString("hex");
 
-    createSession(id, token);
+    createSession(id, token, getSessionMetadata(req));
     setSessionCookie(req, res, token);
 
     return res.json({
@@ -125,7 +141,7 @@ function registerAuthRoutes(app, deps) {
 
     const token = crypto.randomBytes(24).toString("hex");
 
-    createSession(user.id, token);
+    createSession(user.id, token, getSessionMetadata(req));
     setSessionCookie(req, res, token);
 
     return res.json({
