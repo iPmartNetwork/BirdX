@@ -60,8 +60,21 @@ export const fetchAdminMe = () => apiFetch(`${API_BASE}/api/admin/me`);
 
 export const fetchAdminOverview = () => apiFetch(`${API_BASE}/api/admin/overview`);
 
-export const fetchAdminUsers = (query = "") =>
-  apiFetch(`${API_BASE}/api/admin/users?query=${encodeURIComponent(query)}`);
+const buildAdminQuery = (params = {}) => {
+  const search = new URLSearchParams();
+  Object.entries(params || {}).forEach(([key, value]) => {
+    if (value === undefined || value === null || value === "") return;
+    search.set(key, String(value));
+  });
+  const query = search.toString();
+  return query ? `?${query}` : "";
+};
+
+export const fetchAdminUsers = (params = {}) =>
+  apiFetch(`${API_BASE}/api/admin/users${buildAdminQuery(params)}`);
+
+export const fetchAdminUserDetail = (userId) =>
+  apiFetch(`${API_BASE}/api/admin/users/${encodeURIComponent(userId)}`);
 
 export const updateAdminUser = (userId, payload) =>
   apiFetch(`${API_BASE}/api/admin/users/${encodeURIComponent(userId)}`, {
@@ -82,28 +95,54 @@ export const deleteAdminUser = (userId) =>
     method: "DELETE",
   });
 
-export const fetchAdminChats = ({ query = "", type = "" } = {}) =>
+export const deleteAdminUserSession = (userId, sessionId) =>
   apiFetch(
-    `${API_BASE}/api/admin/chats?query=${encodeURIComponent(query)}&type=${encodeURIComponent(
-      type,
+    `${API_BASE}/api/admin/users/${encodeURIComponent(userId)}/sessions/${encodeURIComponent(
+      sessionId,
     )}`,
+    { method: "DELETE" },
   );
+
+export const deleteAdminUserSessions = (userId) =>
+  apiFetch(`${API_BASE}/api/admin/users/${encodeURIComponent(userId)}/sessions`, {
+    method: "DELETE",
+  });
+
+export const fetchAdminChats = (params = {}) =>
+  apiFetch(`${API_BASE}/api/admin/chats${buildAdminQuery(params)}`);
 
 export const deleteAdminChat = (chatId) =>
   apiFetch(`${API_BASE}/api/admin/chats/${encodeURIComponent(chatId)}`, {
     method: "DELETE",
   });
 
-export const fetchAdminFiles = () => apiFetch(`${API_BASE}/api/admin/files`);
+export const fetchAdminFiles = (params = {}) =>
+  apiFetch(`${API_BASE}/api/admin/files${buildAdminQuery(params)}`);
 
 export const deleteAdminFile = (fileId) =>
   apiFetch(`${API_BASE}/api/admin/files/${encodeURIComponent(fileId)}`, {
     method: "DELETE",
   });
 
-export const fetchAdminAuditLogs = () => apiFetch(`${API_BASE}/api/admin/audit-logs`);
+export const fetchAdminAuditLogs = (params = {}) =>
+  apiFetch(`${API_BASE}/api/admin/audit-logs${buildAdminQuery(params)}`);
 
 export const fetchAdminSettings = () => apiFetch(`${API_BASE}/api/admin/settings`);
+
+export const fetchAdminBackups = () => apiFetch(`${API_BASE}/api/admin/backups`);
+
+export const createAdminBackup = () =>
+  apiFetch(`${API_BASE}/api/admin/backups`, {
+    method: "POST",
+  });
+
+export const deleteAdminBackup = (name) =>
+  apiFetch(`${API_BASE}/api/admin/backups/${encodeURIComponent(name)}`, {
+    method: "DELETE",
+  });
+
+export const getAdminBackupDownloadUrl = (name) =>
+  `${API_BASE}/api/admin/backups/${encodeURIComponent(name)}/download`;
 
 export const discoverUsersAndGroups = ({ username, query }) =>
   apiFetch(
