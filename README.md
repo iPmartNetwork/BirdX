@@ -1,6 +1,6 @@
 # BirdX
 
-[![Version](https://img.shields.io/badge/version-2.3.0-10b981)](./VERSION)
+[![Version](https://img.shields.io/badge/version-2.4.0-10b981)](./VERSION)
 [![License](https://img.shields.io/badge/license-MIT-blue)](./LICENSE)
 [![Node.js](https://img.shields.io/badge/node-%3E%3D24.0.0-339933)](https://nodejs.org/)
 
@@ -16,9 +16,9 @@ https://github.com/bllackbull/Songbird
 
 ## Current Release
 
-`2.3.0`
+`2.4.0`
 
-This release focuses on the Admin Panel security upgrade, multi-level admin roles, password re-authentication for sensitive actions, stronger audit logging, production operations, voice calls, Android PWA reliability, and message reactions.
+This release focuses on the Admin Panel security and operations upgrade: multi-level admin roles, password re-authentication for sensitive actions, stronger audit logging, security event tracking, system health monitoring, group/channel administration, production operations, voice calls, Android PWA reliability, and message reactions.
 
 ## What BirdX Includes
 
@@ -69,8 +69,12 @@ Admin capabilities:
 - User detail drawer with profile metadata, stats, chats, files, active sessions, IP addresses, and user-agent data
 - Session management with single-session revoke and logout-all
 - Chat management with search, filtering, sorting, pagination, and deletion
+- Group/channel detail drawer with visibility, public username, invite-link, member, and manager controls
+- Public/private chat visibility filtering
 - File management with owner, type, size, pagination, and deletion
 - Audit logs with filters by action, actor, and target type, plus IP address, user-agent, and success/failure visibility
+- Monitor tab with CPU, memory, disk, runtime, database, uploads, backups, push, TURN, and storage-encryption status
+- Security summary with failed login tracking, banned login attempts, failed admin re-authentication, sensitive admin actions, active admin sessions, top source IPs, and recent security activity
 - Maintenance tab for database backup creation, download, listing, and deletion
 - Professional in-app confirmation modals for sensitive actions
 
