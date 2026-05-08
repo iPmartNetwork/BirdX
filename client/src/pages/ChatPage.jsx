@@ -6354,6 +6354,11 @@ const peerStatusLabel = !activeHeaderPeer || activeHeaderPeer?.isDeleted
   const callDurationLabel = formatCallDuration(callDurationSeconds);
   const callIsConnected =
     callState?.status === "connected" || callState?.status === "reconnecting";
+  const handleOpenAdminPanel = () => {
+    if (typeof window === "undefined") return;
+    window.history.pushState({}, "", "/admin");
+    window.dispatchEvent(new PopStateEvent("popstate"));
+  };
 
   return (
     <div
@@ -6448,6 +6453,7 @@ const peerStatusLabel = !activeHeaderPeer || activeHeaderPeer?.isDeleted
         testNotificationSent={testNotificationSent}
         notificationsDebugLine={notificationsDebugLine}
         onOpenSavedMessages={openSavedMessages}
+        onOpenAdmin={handleOpenAdminPanel}
         onClearCache={handleClearCache}
         dataCacheStats={dataCacheStats}
         onDeleteAccount={handleDeleteAccount}
