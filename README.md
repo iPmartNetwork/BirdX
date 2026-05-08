@@ -4,6 +4,8 @@
 
 Repository: https://github.com/iPmartNetwork/BirdX
 
+Orginal Repository: https://github.com/bllackbull/Songbird
+
 ## Version
 
 Current release: `2.1.0`
