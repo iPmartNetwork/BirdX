@@ -2,6 +2,23 @@
 
 All notable changes to BirdX are documented in this file.
 
+
+## v2.1.0 - 2026-05-08
+
+### Added
+
+- Added the first BirdX Admin Panel at `/admin`.
+- Added admin/user roles with database migration support.
+- Added secure session-based `/api/admin/*` endpoints.
+- Added admin dashboard metrics for users, chats, messages, files, sessions, and storage usage.
+- Added user management for role changes, bans, password resets, and deletion.
+- Added chat management with search, type filtering, and deletion.
+- Added uploaded file management with owner, size, type, and deletion controls.
+- Added admin audit logs for sensitive actions.
+- Added `ADMIN_USERNAMES` bootstrap support in `.env.example`.
+- Added an Admin Panel entry in settings for admin users.
+
+
 ## v2.0.0 - 2026-05-07
 
 ### Added
