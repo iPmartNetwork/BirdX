@@ -3,6 +3,23 @@
 All notable changes to BirdX are documented in this file.
 
 
+# v2.2.0 - 2026-05-08
+
+### Added
+
+- Added advanced admin pagination and filtering for users, chats, files, and audit logs.
+- Added user detail drawer with profile metadata, statistics, recent chats, files, and active sessions.
+- Added session management for admins, including revoking one session or logging out all sessions for a user.
+- Added professional action confirmation modals for destructive and sensitive admin actions.
+- Added database backup creation, listing, download, and deletion from the admin maintenance tab.
+- Added stronger admin audit filters by action, actor, and target type.
+
+### Changed
+
+- Redesigned the Admin Panel into a more production-oriented workspace.
+- Replaced browser prompt/confirm flows with in-app modal workflows.
+- Improved admin list APIs with server-side pagination, sorting, and filtering.
+
 ## v2.1.0 - 2026-05-08
 
 ### Added
@@ -17,7 +34,6 @@ All notable changes to BirdX are documented in this file.
 - Added admin audit logs for sensitive actions.
 - Added `ADMIN_USERNAMES` bootstrap support in `.env.example`.
 - Added an Admin Panel entry in settings for admin users.
-
 
 ## v2.0.0 - 2026-05-07
 
