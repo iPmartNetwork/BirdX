@@ -38,6 +38,8 @@ import {
 } from "../icons/lucide.js";
 
 const PAGE_SIZE = 25;
+const ADMIN_ROLE_OPTIONS = ["owner", "admin", "moderator", "support", "user"];
+const ADMIN_ACCESS_ROLES = ADMIN_ROLE_OPTIONS.filter((role) => role !== "user");
 
 const tabs = [
   { id: "overview", label: "Overview", icon: Database },
@@ -129,9 +131,17 @@ function Pager({ pagination, onPage }) {
 
 function ActionModal({ action, onClose, onConfirm, busy }) {
   const [value, setValue] = useState("");
+  const [adminPassword, setAdminPassword] = useState("");
+  useEffect(() => {
+    setValue("");
+    setAdminPassword("");
+  }, [action]);
   if (!action) return null;
   const needsInput = action.inputLabel;
-  const canSubmit = !needsInput || value.length >= (action.minLength || 1);
+  const needsAdminPassword = Boolean(action.requiresPassword);
+  const canSubmit =
+    (!needsInput || value.length >= (action.minLength || 1)) &&
+    (!needsAdminPassword || adminPassword.length >= 1);
   return (
     <div className="fixed inset-0 z-[500] flex items-center justify-center bg-slate-950/70 p-4 backdrop-blur-sm">
       <section className="w-full max-w-md rounded-lg border border-slate-200 bg-white p-5 shadow-2xl dark:border-white/10 dark:bg-slate-950">
@@ -151,6 +161,20 @@ function ActionModal({ action, onClose, onConfirm, busy }) {
             />
           </label>
         ) : null}
+        {needsAdminPassword ? (
+          <label className="mt-4 block">
+            <span className="text-xs font-bold uppercase tracking-wide text-slate-500">
+              Admin password
+            </span>
+            <input
+              type="password"
+              value={adminPassword}
+              onChange={(event) => setAdminPassword(event.target.value)}
+              className="mt-2 h-10 w-full rounded-lg border border-slate-200 bg-white px-3 text-sm outline-none focus:border-emerald-400 dark:border-white/10 dark:bg-slate-900"
+              autoFocus={!needsInput}
+            />
+          </label>
+        ) : null}
         <div className="mt-5 flex justify-end gap-2">
           <button
             type="button"
@@ -162,7 +186,7 @@ function ActionModal({ action, onClose, onConfirm, busy }) {
           <button
             type="button"
             disabled={!canSubmit || busy}
-            onClick={() => onConfirm(value)}
+            onClick={() => onConfirm({ value, adminPassword })}
             className={`rounded-lg px-4 py-2 text-sm font-semibold text-white disabled:opacity-50 ${
               action.danger ? "bg-rose-500 hover:bg-rose-600" : "bg-emerald-500 hover:bg-emerald-600"
             }`}
@@ -226,6 +250,9 @@ function UserDetailDrawer({ detail, onClose, onRevokeSession, onRevokeAllSession
                       <p className="text-xs text-slate-500 dark:text-slate-400">
                         Created {session.created_at} / Last seen {session.last_seen}
                       </p>
+                      <p className="mt-1 max-w-sm truncate text-xs text-slate-400 dark:text-slate-500">
+                        IP {session.ip_address || "-"} / {session.user_agent || "-"}
+                      </p>
                     </div>
                     <button
                       type="button"
@@ -288,7 +315,7 @@ export default function AdminPage({ user, isDark, onToggleTheme, onNavigate }) {
   const [error, setError] = useState("");
   const [action, setAction] = useState(null);
 
-  const isAdmin = Boolean(user?.isAdmin || String(user?.role || "").toLowerCase() === "admin");
+  const isAdmin = Boolean(user?.isAdmin || ADMIN_ACCESS_ROLES.includes(String(user?.role || "").toLowerCase()));
 
   const withPageSize = (params) => ({ ...params, pageSize: PAGE_SIZE });
 
@@ -444,7 +471,7 @@ export default function AdminPage({ user, isDark, onToggleTheme, onNavigate }) {
           </div>
           <div>
             <p className="text-sm font-bold">BirdX Admin</p>
-            <p className="text-xs text-slate-500 dark:text-slate-400">v2.2 workspace</p>
+            <p className="text-xs text-slate-500 dark:text-slate-400">v2.3 workspace</p>
           </div>
         </div>
         <nav className="mt-6 space-y-1">
@@ -559,8 +586,11 @@ export default function AdminPage({ user, isDark, onToggleTheme, onNavigate }) {
                 </div>
                 <select value={userFilters.role} onChange={(event) => setUserFilters((prev) => ({ ...prev, role: event.target.value, page: 1 }))} className="h-10 rounded-lg border border-slate-200 bg-white px-3 text-sm dark:border-white/10 dark:bg-slate-900">
                   <option value="">All roles</option>
-                  <option value="admin">Admin</option>
-                  <option value="user">User</option>
+                  {ADMIN_ROLE_OPTIONS.map((role) => (
+                    <option key={role} value={role}>
+                      {role}
+                    </option>
+                  ))}
                 </select>
                 <select value={userFilters.status} onChange={(event) => setUserFilters((prev) => ({ ...prev, status: event.target.value, page: 1 }))} className="h-10 rounded-lg border border-slate-200 bg-white px-3 text-sm dark:border-white/10 dark:bg-slate-900">
                   <option value="">All status</option>
@@ -605,15 +635,25 @@ export default function AdminPage({ user, isDark, onToggleTheme, onNavigate }) {
                           <td className="px-4 py-3">
                             <select
                               value={item.role}
-                              onChange={(event) =>
-                                void runAction(`role-${item.id}`, async () => {
-                                  await readJsonResponse(await updateAdminUser(item.id, { role: event.target.value }));
-                                }, loadUsers)
-                              }
+                              onChange={(event) => {
+                                const nextRole = event.target.value;
+                                confirmAction({
+                                  title: "Change role",
+                                  body: `Change @${item.username} role to ${nextRole}?`,
+                                  confirmLabel: "Change",
+                                  requiresPassword: true,
+                                  run: async ({ adminPassword }) =>
+                                    readJsonResponse(await updateAdminUser(item.id, { role: nextRole, adminPassword })),
+                                  refresh: loadUsers,
+                                });
+                              }}
                               className="rounded-lg border border-slate-200 bg-white px-2 py-1 text-sm font-semibold dark:border-white/10 dark:bg-slate-900"
                             >
-                              <option value="user">user</option>
-                              <option value="admin">admin</option>
+                              {ADMIN_ROLE_OPTIONS.map((role) => (
+                                <option key={role} value={role}>
+                                  {role}
+                                </option>
+                              ))}
                             </select>
                             {item.envAdmin ? <span className="ml-2 rounded-full bg-amber-100 px-2 py-1 text-xs font-bold text-amber-700 dark:bg-amber-500/10 dark:text-amber-200">env</span> : null}
                           </td>
@@ -626,9 +666,9 @@ export default function AdminPage({ user, isDark, onToggleTheme, onNavigate }) {
                           <td className="px-4 py-3">
                             <div className="flex justify-end gap-2">
                               <button type="button" onClick={() => void openUserDetail(item)} className="h-8 rounded-lg border border-slate-200 px-2 text-xs font-semibold dark:border-white/10">Detail</button>
-                              <button type="button" onClick={() => confirmAction({ title: item.banned ? "Unban user" : "Ban user", body: `Change ban status for @${item.username}?`, confirmLabel: item.banned ? "Unban" : "Ban", danger: !item.banned, run: async () => readJsonResponse(await updateAdminUser(item.id, { banned: !item.banned })), refresh: loadUsers })} className="inline-flex h-8 items-center gap-1 rounded-lg border border-slate-200 px-2 text-xs font-semibold dark:border-white/10"><Ban size={14} />{item.banned ? "Unban" : "Ban"}</button>
-                              <button type="button" onClick={() => confirmAction({ title: "Reset password", body: `Set a new password for @${item.username}.`, inputLabel: "New password", inputType: "password", minLength: 6, confirmLabel: "Reset", run: async (password) => readJsonResponse(await resetAdminUserPassword(item.id, password)), refresh: loadUsers })} className="inline-flex h-8 items-center gap-1 rounded-lg border border-slate-200 px-2 text-xs font-semibold dark:border-white/10"><Lock size={14} />Password</button>
-                              <button type="button" onClick={() => confirmAction({ title: "Delete user", body: `Delete @${item.username}? This cannot be undone.`, confirmLabel: "Delete", danger: true, run: async () => readJsonResponse(await deleteAdminUser(item.id)), refresh: loadUsers })} className="inline-flex h-8 items-center gap-1 rounded-lg border border-rose-200 px-2 text-xs font-semibold text-rose-600 dark:border-rose-500/30"><Trash size={14} />Delete</button>
+                              <button type="button" onClick={() => confirmAction({ title: item.banned ? "Unban user" : "Ban user", body: `Change ban status for @${item.username}?`, confirmLabel: item.banned ? "Unban" : "Ban", danger: !item.banned, requiresPassword: true, run: async ({ adminPassword }) => readJsonResponse(await updateAdminUser(item.id, { banned: !item.banned, adminPassword })), refresh: loadUsers })} className="inline-flex h-8 items-center gap-1 rounded-lg border border-slate-200 px-2 text-xs font-semibold dark:border-white/10"><Ban size={14} />{item.banned ? "Unban" : "Ban"}</button>
+                              <button type="button" onClick={() => confirmAction({ title: "Reset password", body: `Set a new password for @${item.username}.`, inputLabel: "New password", inputType: "password", minLength: 6, confirmLabel: "Reset", requiresPassword: true, run: async ({ value, adminPassword }) => readJsonResponse(await resetAdminUserPassword(item.id, { password: value, adminPassword })), refresh: loadUsers })} className="inline-flex h-8 items-center gap-1 rounded-lg border border-slate-200 px-2 text-xs font-semibold dark:border-white/10"><Lock size={14} />Password</button>
+                              <button type="button" onClick={() => confirmAction({ title: "Delete user", body: `Delete @${item.username}? This cannot be undone.`, confirmLabel: "Delete", danger: true, requiresPassword: true, run: async ({ adminPassword }) => readJsonResponse(await deleteAdminUser(item.id, { adminPassword })), refresh: loadUsers })} className="inline-flex h-8 items-center gap-1 rounded-lg border border-rose-200 px-2 text-xs font-semibold text-rose-600 dark:border-rose-500/30"><Trash size={14} />Delete</button>
                             </div>
                           </td>
                         </tr>
@@ -660,7 +700,7 @@ export default function AdminPage({ user, isDark, onToggleTheme, onNavigate }) {
                       <p className="font-bold">{chat.name || `${chat.type} #${chat.id}`}</p>
                       <p className="text-xs text-slate-500 dark:text-slate-400">{chat.type} / {chat.group_username || "no username"} / {chat.member_count} members / {chat.message_count} messages</p>
                     </div>
-                    <button type="button" onClick={() => confirmAction({ title: "Delete chat", body: `Delete chat #${chat.id}? This cannot be undone.`, confirmLabel: "Delete", danger: true, run: async () => readJsonResponse(await deleteAdminChat(chat.id)), refresh: loadChats })} className="inline-flex h-9 items-center gap-2 rounded-lg border border-rose-200 px-3 text-sm font-semibold text-rose-600 dark:border-rose-500/30"><Trash size={15} />Delete</button>
+                    <button type="button" onClick={() => confirmAction({ title: "Delete chat", body: `Delete chat #${chat.id}? This cannot be undone.`, confirmLabel: "Delete", danger: true, requiresPassword: true, run: async ({ adminPassword }) => readJsonResponse(await deleteAdminChat(chat.id, { adminPassword })), refresh: loadChats })} className="inline-flex h-9 items-center gap-2 rounded-lg border border-rose-200 px-3 text-sm font-semibold text-rose-600 dark:border-rose-500/30"><Trash size={15} />Delete</button>
                   </section>
                 )) : <EmptyState text="No chats found." />}
               </div>
@@ -681,7 +721,7 @@ export default function AdminPage({ user, isDark, onToggleTheme, onNavigate }) {
                 {files.length ? files.map((file) => (
                   <section key={file.id} className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-slate-200 bg-white p-4 dark:border-white/10 dark:bg-slate-950">
                     <div className="min-w-0"><p className="truncate font-bold">{file.original_name || file.stored_name}</p><p className="text-xs text-slate-500 dark:text-slate-400">{file.size_label} / {file.mime_type || file.kind || "file"} / @{file.owner_username || "unknown"}</p></div>
-                    <button type="button" onClick={() => confirmAction({ title: "Delete file", body: `Delete ${file.original_name || file.stored_name}?`, confirmLabel: "Delete", danger: true, run: async () => readJsonResponse(await deleteAdminFile(file.id)), refresh: loadFiles })} className="inline-flex h-9 items-center gap-2 rounded-lg border border-rose-200 px-3 text-sm font-semibold text-rose-600 dark:border-rose-500/30"><Trash size={15} />Delete</button>
+                    <button type="button" onClick={() => confirmAction({ title: "Delete file", body: `Delete ${file.original_name || file.stored_name}?`, confirmLabel: "Delete", danger: true, requiresPassword: true, run: async ({ adminPassword }) => readJsonResponse(await deleteAdminFile(file.id, { adminPassword })), refresh: loadFiles })} className="inline-flex h-9 items-center gap-2 rounded-lg border border-rose-200 px-3 text-sm font-semibold text-rose-600 dark:border-rose-500/30"><Trash size={15} />Delete</button>
                   </section>
                 )) : <EmptyState text="No files found." />}
               </div>
@@ -703,7 +743,15 @@ export default function AdminPage({ user, isDark, onToggleTheme, onNavigate }) {
                 <div className="divide-y divide-slate-100 dark:divide-white/10">
                   {auditLogs.length ? auditLogs.map((log) => (
                     <div key={log.id} className="flex flex-wrap items-center justify-between gap-3 px-4 py-3 text-sm">
-                      <div><p className="font-bold">{log.action}</p><p className="text-xs text-slate-500 dark:text-slate-400">{log.actor_username || "system"} / {log.target_type || "-"} #{log.target_id || "-"}</p></div>
+                      <div>
+                        <p className="font-bold">
+                          {log.action}
+                          {!log.success ? <span className="ml-2 rounded-full bg-rose-100 px-2 py-0.5 text-xs text-rose-700 dark:bg-rose-500/10 dark:text-rose-200">failed</span> : null}
+                        </p>
+                        <p className="text-xs text-slate-500 dark:text-slate-400">
+                          {log.actor_username || "system"} / {log.target_type || "-"} #{log.target_id || "-"} / IP {log.ip_address || "-"}
+                        </p>
+                      </div>
                       <span className="text-xs text-slate-500 dark:text-slate-400">{log.created_at}</span>
                     </div>
                   )) : <EmptyState text="No audit logs found." />}
@@ -724,7 +772,7 @@ export default function AdminPage({ user, isDark, onToggleTheme, onNavigate }) {
               <section className="rounded-lg border border-slate-200 bg-white p-4 dark:border-white/10 dark:bg-slate-950">
                 <div className="flex flex-wrap items-center justify-between gap-3">
                   <div><h2 className="text-sm font-bold">Database backups</h2><p className="text-xs text-slate-500 dark:text-slate-400">Create and download safe database snapshots.</p></div>
-                  <button type="button" onClick={() => void runAction("backup-create", async () => { const data = await readJsonResponse(await createAdminBackup()); setBackups(data.backups || []); }, loadBackups)} className="inline-flex h-10 items-center gap-2 rounded-lg bg-emerald-500 px-4 text-sm font-semibold text-white"><Download size={16} />Create backup</button>
+                  <button type="button" onClick={() => confirmAction({ title: "Create backup", body: "Create a fresh database backup now?", confirmLabel: "Create", requiresPassword: true, run: async ({ adminPassword }) => { const data = await readJsonResponse(await createAdminBackup({ adminPassword })); setBackups(data.backups || []); }, refresh: loadBackups })} className="inline-flex h-10 items-center gap-2 rounded-lg bg-emerald-500 px-4 text-sm font-semibold text-white"><Download size={16} />Create backup</button>
                 </div>
                 <div className="mt-4 divide-y divide-slate-100 dark:divide-white/10">
                   {backups.length ? backups.map((backup) => (
@@ -732,7 +780,7 @@ export default function AdminPage({ user, isDark, onToggleTheme, onNavigate }) {
                       <div><p className="font-semibold">{backup.name}</p><p className="text-xs text-slate-500 dark:text-slate-400">{backup.sizeLabel} / {backup.createdAt}</p></div>
                       <div className="flex gap-2">
                         <a href={getAdminBackupDownloadUrl(backup.name)} className="inline-flex h-8 items-center gap-1 rounded-lg border border-slate-200 px-2 text-xs font-bold dark:border-white/10"><Download size={14} />Download</a>
-                        <button type="button" onClick={() => confirmAction({ title: "Delete backup", body: `Delete ${backup.name}?`, confirmLabel: "Delete", danger: true, run: async () => { const data = await readJsonResponse(await deleteAdminBackup(backup.name)); setBackups(data.backups || []); }, refresh: loadBackups })} className="inline-flex h-8 items-center gap-1 rounded-lg border border-rose-200 px-2 text-xs font-bold text-rose-600 dark:border-rose-500/30"><Trash size={14} />Delete</button>
+                        <button type="button" onClick={() => confirmAction({ title: "Delete backup", body: `Delete ${backup.name}?`, confirmLabel: "Delete", danger: true, requiresPassword: true, run: async ({ adminPassword }) => { const data = await readJsonResponse(await deleteAdminBackup(backup.name, { adminPassword })); setBackups(data.backups || []); }, refresh: loadBackups })} className="inline-flex h-8 items-center gap-1 rounded-lg border border-rose-200 px-2 text-xs font-bold text-rose-600 dark:border-rose-500/30"><Trash size={14} />Delete</button>
                       </div>
                     </div>
                   )) : <p className="py-4 text-sm text-slate-500">No backups yet.</p>}
@@ -747,12 +795,12 @@ export default function AdminPage({ user, isDark, onToggleTheme, onNavigate }) {
         action={action}
         busy={Boolean(busyKey)}
         onClose={() => setAction(null)}
-        onConfirm={(value) => {
+        onConfirm={(payload) => {
           if (!action) return;
           void runAction(
             action.title || "action",
             async () => {
-              await action.run(value);
+              await action.run(payload);
             },
             action.refresh || loadAll,
           );
@@ -767,8 +815,9 @@ export default function AdminPage({ user, isDark, onToggleTheme, onNavigate }) {
             body: `Revoke session #${session.id} for @${detailUser.username}?`,
             confirmLabel: "Revoke",
             danger: true,
-            run: async () => {
-              await readJsonResponse(await deleteAdminUserSession(detailUser.id, session.id));
+            requiresPassword: true,
+            run: async ({ adminPassword }) => {
+              await readJsonResponse(await deleteAdminUserSession(detailUser.id, session.id, { adminPassword }));
               setUserDetail(await readJsonResponse(await fetchAdminUserDetail(detailUser.id)));
             },
             refresh: loadUsers,
@@ -780,8 +829,9 @@ export default function AdminPage({ user, isDark, onToggleTheme, onNavigate }) {
             body: `Logout all active sessions for @${detailUser.username}?`,
             confirmLabel: "Logout all",
             danger: true,
-            run: async () => {
-              await readJsonResponse(await deleteAdminUserSessions(detailUser.id));
+            requiresPassword: true,
+            run: async ({ adminPassword }) => {
+              await readJsonResponse(await deleteAdminUserSessions(detailUser.id, { adminPassword }));
               setUserDetail(await readJsonResponse(await fetchAdminUserDetail(detailUser.id)));
             },
             refresh: loadUsers,
