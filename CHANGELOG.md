@@ -2,6 +2,23 @@
 
 All notable changes to BirdX are documented in this file.
 
+## v2.4.0 - 2026-05-09
+
+### Added
+
+- Added an Admin Panel Monitor tab with CPU, memory, disk, runtime, database, upload, backup, push, TURN, and storage-encryption health data.
+- Added security event logging for failed and banned login attempts.
+- Added Admin Panel security summary cards for failed logins, banned logins, failed admin re-authentication, sensitive actions, active admin sessions, top source IPs, recent security events, and recent sensitive actions.
+- Added group/channel detail administration from the Admin Panel, including visibility, public username, invite-link settings, member listing, member add/remove, and member role management.
+- Added database migration `027-security-events` for persistent security event tracking.
+
+### Changed
+
+- Expanded chat filtering with public/private visibility filters in the Admin Panel.
+
+### Fixed
+
+- Finished wiring the Admin Panel Monitor and group/channel detail UI to the new admin API routes.
 
 ## v2.3.0 - 2026-05-09
 
