@@ -222,6 +222,8 @@ const USER_ROLE_SELECT_SQL = hasColumn("users", "role") ? "role" : "'user' AS ro
 const USER_ROLE_QUALIFIED_SELECT_SQL = hasColumn("users", "role")
   ? "users.role"
   : "'user' AS role";
+const SESSIONS_HAS_IP_ADDRESS = hasColumn("sessions", "ip_address");
+const SESSIONS_HAS_USER_AGENT = hasColumn("sessions", "user_agent");
 
 process.once("beforeExit", () => {
   saveDatabase();
@@ -1633,7 +1635,20 @@ export function listMutedUserIdsForChat(chatId) {
     .filter((userId) => Number.isFinite(userId) && userId > 0);
 }
 
-export function createSession(userId, token) {
+export function createSession(userId, token, metadata = {}) {
+  if (SESSIONS_HAS_IP_ADDRESS && SESSIONS_HAS_USER_AGENT) {
+    run(
+      "INSERT INTO sessions (user_id, token, ip_address, user_agent) VALUES (?, ?, ?, ?)",
+      [
+        userId,
+        token,
+        String(metadata.ipAddress || "").slice(0, 120) || null,
+        String(metadata.userAgent || "").slice(0, 500) || null,
+      ],
+    );
+    return;
+  }
+
   run("INSERT INTO sessions (user_id, token) VALUES (?, ?)", [userId, token]);
 }
 
