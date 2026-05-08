@@ -23,6 +23,7 @@ import { migration022MessageClientRequestId } from "./022-message-client-request
 import { migration023ChatLeftMembers } from "./023-chat-left-members.js";
 import * as migration024MessageReactions from "./024-message-reactions.js";
 import { migration025AdminPanel } from "./025-admin-panel.js";
+import { migration026AdminSecurity } from "./026-admin-security.js";
 
 export const migrations = [
   migration001InitialSchema,
@@ -50,4 +51,5 @@ export const migrations = [
   migration023ChatLeftMembers,
   migration024MessageReactions,
   migration025AdminPanel,
+  migration026AdminSecurity,
 ];
