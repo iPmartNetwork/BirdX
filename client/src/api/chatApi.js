@@ -56,6 +56,55 @@ export const sendPushTest = ({ username }) =>
     body: JSON.stringify({ username }),
   });
 
+export const fetchAdminMe = () => apiFetch(`${API_BASE}/api/admin/me`);
+
+export const fetchAdminOverview = () => apiFetch(`${API_BASE}/api/admin/overview`);
+
+export const fetchAdminUsers = (query = "") =>
+  apiFetch(`${API_BASE}/api/admin/users?query=${encodeURIComponent(query)}`);
+
+export const updateAdminUser = (userId, payload) =>
+  apiFetch(`${API_BASE}/api/admin/users/${encodeURIComponent(userId)}`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+
+export const resetAdminUserPassword = (userId, password) =>
+  apiFetch(`${API_BASE}/api/admin/users/${encodeURIComponent(userId)}/reset-password`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ password }),
+  });
+
+export const deleteAdminUser = (userId) =>
+  apiFetch(`${API_BASE}/api/admin/users/${encodeURIComponent(userId)}`, {
+    method: "DELETE",
+  });
+
+export const fetchAdminChats = ({ query = "", type = "" } = {}) =>
+  apiFetch(
+    `${API_BASE}/api/admin/chats?query=${encodeURIComponent(query)}&type=${encodeURIComponent(
+      type,
+    )}`,
+  );
+
+export const deleteAdminChat = (chatId) =>
+  apiFetch(`${API_BASE}/api/admin/chats/${encodeURIComponent(chatId)}`, {
+    method: "DELETE",
+  });
+
+export const fetchAdminFiles = () => apiFetch(`${API_BASE}/api/admin/files`);
+
+export const deleteAdminFile = (fileId) =>
+  apiFetch(`${API_BASE}/api/admin/files/${encodeURIComponent(fileId)}`, {
+    method: "DELETE",
+  });
+
+export const fetchAdminAuditLogs = () => apiFetch(`${API_BASE}/api/admin/audit-logs`);
+
+export const fetchAdminSettings = () => apiFetch(`${API_BASE}/api/admin/settings`);
+
 export const discoverUsersAndGroups = ({ username, query }) =>
   apiFetch(
     `${API_BASE}/api/discover?username=${encodeURIComponent(
