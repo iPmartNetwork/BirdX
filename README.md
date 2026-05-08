@@ -1,6 +1,6 @@
 # BirdX
 
-[![Version](https://img.shields.io/badge/version-2.2.0-10b981)](./VERSION)
+[![Version](https://img.shields.io/badge/version-2.3.0-10b981)](./VERSION)
 [![License](https://img.shields.io/badge/license-MIT-blue)](./LICENSE)
 [![Node.js](https://img.shields.io/badge/node-%3E%3D24.0.0-339933)](https://nodejs.org/)
 
@@ -18,7 +18,7 @@ https://github.com/bllackbull/Songbird
 
 `2.3.0`
 
-This release focuses on the advanced Admin Panel, production operations, user/session control, database backups, voice calls, Android PWA reliability, and message reactions.
+This release focuses on the Admin Panel security upgrade, multi-level admin roles, password re-authentication for sensitive actions, stronger audit logging, production operations, voice calls, Android PWA reliability, and message reactions.
 
 ## What BirdX Includes
 
@@ -61,15 +61,16 @@ BirdX includes a real admin workspace at:
 
 Admin capabilities:
 
-- Admin/user roles
+- Owner, admin, moderator, support, and user roles
 - Bootstrap admins with `ADMIN_USERNAMES`
+- Password re-authentication before sensitive admin actions
 - Dashboard metrics for users, chats, messages, files, sessions, and storage
 - User management with role changes, ban/unban, password reset, and deletion
-- User detail drawer with profile metadata, stats, chats, files, and active sessions
+- User detail drawer with profile metadata, stats, chats, files, active sessions, IP addresses, and user-agent data
 - Session management with single-session revoke and logout-all
 - Chat management with search, filtering, sorting, pagination, and deletion
 - File management with owner, type, size, pagination, and deletion
-- Audit logs with filters by action, actor, and target type
+- Audit logs with filters by action, actor, and target type, plus IP address, user-agent, and success/failure visibility
 - Maintenance tab for database backup creation, download, listing, and deletion
 - Professional in-app confirmation modals for sensitive actions
 
@@ -180,20 +181,20 @@ Important:
 - Do not change `STORAGE_ENCRYPTION_KEY` after first run.
 - Use `.env` in production, not `.env.example`.
 - Keep `.env` out of Git.
-- Set `ADMIN_USERNAMES` to the username that should become the first admin.
+- Set `ADMIN_USERNAMES` to the username that should become the first owner/admin.
 - Restart the server after changing `.env`.
 
 ## Admin Setup
 
-To make an existing user an admin, add the username to `.env`:
+To make an existing user the bootstrap owner, add the username to `.env`:
 
 ```env
 ADMIN_USERNAMES=admin
 ```
 
-Then restart the server. On startup, BirdX will bootstrap matching users as admins and unban them if needed.
+Then restart the server. On startup, BirdX will bootstrap matching users as owners and unban them if needed.
 
-You can add multiple bootstrap admins:
+You can add multiple bootstrap owners:
 
 ```env
 ADMIN_USERNAMES=admin,admin2,admin3
