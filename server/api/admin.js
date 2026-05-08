@@ -46,6 +46,48 @@ function registerAdminRoutes(app, deps) {
       .filter(Boolean),
   );
 
+  const adminHasColumn = (tableName, columnName) =>
+    adminGetAll(`PRAGMA table_info('${String(tableName || "").replace(/'/g, "''")}')`).some(
+      (column) => column?.name === columnName,
+    );
+
+  const ensureAdminSchema = () => {
+    try {
+      if (!adminHasColumn("users", "role")) {
+        adminRun("ALTER TABLE users ADD COLUMN role TEXT NOT NULL DEFAULT 'user'");
+      }
+
+      adminRun(`
+        CREATE TABLE IF NOT EXISTS admin_audit_logs (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          actor_user_id INTEGER,
+          actor_username TEXT,
+          action TEXT NOT NULL,
+          target_type TEXT,
+          target_id TEXT,
+          details TEXT,
+          created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+        )
+      `);
+
+      adminRun(`
+        CREATE INDEX IF NOT EXISTS idx_admin_audit_logs_created_at
+        ON admin_audit_logs(created_at)
+      `);
+
+      adminRun(`
+        CREATE INDEX IF NOT EXISTS idx_admin_audit_logs_actor
+        ON admin_audit_logs(actor_user_id)
+      `);
+
+      adminSave();
+    } catch (error) {
+      console.warn("[admin] schema self-heal failed:", String(error?.message || error));
+    }
+  };
+
+  ensureAdminSchema();
+
   const normalizeAdminRole = (value) =>
     String(value || "").trim().toLowerCase() === "admin" ? "admin" : "user";
 
