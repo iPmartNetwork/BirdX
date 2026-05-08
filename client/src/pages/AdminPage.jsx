@@ -335,21 +335,32 @@ export default function AdminPage({ user, isDark, onToggleTheme, onNavigate }) {
     if (!isAdmin) return;
     setLoading(true);
     setError("");
-    try {
-      await Promise.all([
-        loadOverview(),
-        loadUsers(),
-        loadChats(),
-        loadFiles(),
-        loadAudit(),
-        loadSettings(),
-        loadBackups(),
-      ]);
-    } catch (err) {
-      setError(err?.message || "Unable to load admin panel.");
-    } finally {
-      setLoading(false);
+    const tasks = [
+      ["overview", loadOverview],
+      ["users", loadUsers],
+      ["chats", loadChats],
+      ["files", loadFiles],
+      ["audit", loadAudit],
+      ["settings", loadSettings],
+      ["backups", loadBackups],
+    ];
+    const results = await Promise.allSettled(tasks.map(([, loader]) => loader()));
+    const failed = results
+      .map((result, index) =>
+        result.status === "rejected"
+          ? `${tasks[index][0]}: ${result.reason?.message || "failed"}`
+          : "",
+      )
+      .filter(Boolean);
+    if (failed.length && failed.length === tasks.length) {
+      setError("Unable to load admin panel.");
+    } else {
+      setError("");
+      if (failed.length) {
+        console.warn("[admin] partial load failed:", failed.join(" | "));
+      }
     }
+    setLoading(false);
   }, [isAdmin, loadAudit, loadBackups, loadChats, loadFiles, loadOverview, loadSettings, loadUsers]);
 
   useEffect(() => {
