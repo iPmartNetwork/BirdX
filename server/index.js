@@ -208,6 +208,12 @@ const MESSAGE_MAX_CHARS = readEnvInt(
   { min: 1, max: 20000 },
 );
 const ACCOUNT_CREATION = readEnvBool("ACCOUNT_CREATION", true);
+const ADMIN_USERNAMES = String(
+  process.env.ADMIN_USERNAMES || process.env.BIRDX_ADMIN_USERNAMES || "",
+)
+  .split(/[,\s]+/)
+  .map((item) => item.trim().toLowerCase())
+  .filter(Boolean);
 const vapid = ensureValidVapidKeys({ projectRootDir, fs, path, webpush });
 const dataDir = path.resolve(serverDir, "..", "data");
 const uploadRootDir = path.join(dataDir, "uploads", "messages");
@@ -432,6 +438,7 @@ const apiDeps = {
   USERNAME_MAX,
   MESSAGE_MAX_CHARS,
   ACCOUNT_CREATION,
+  ADMIN_USERNAMES,
   USERNAME_REGEX,
   VAPID_PUBLIC_KEY: PUSH_ENABLED ? VAPID_PUBLIC_KEY : "",
   addChatMember,
