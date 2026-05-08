@@ -16,7 +16,7 @@ https://github.com/bllackbull/Songbird
 
 ## Current Release
 
-`2.2.0`
+`2.3.0`
 
 This release focuses on the advanced Admin Panel, production operations, user/session control, database backups, voice calls, Android PWA reliability, and message reactions.
 
