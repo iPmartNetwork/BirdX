@@ -218,6 +218,11 @@ runDatabaseMigrations();
 
 saveDatabase();
 
+const USER_ROLE_SELECT_SQL = hasColumn("users", "role") ? "role" : "'user' AS role";
+const USER_ROLE_QUALIFIED_SELECT_SQL = hasColumn("users", "role")
+  ? "users.role"
+  : "'user' AS role";
+
 process.once("beforeExit", () => {
   saveDatabase();
 });
@@ -232,14 +237,14 @@ export function getCurrentSchemaVersion() {
 
 export function findUserByUsername(username) {
   return getRow(
-    "SELECT id, username, nickname, avatar_url, color, status, password_hash, banned, role FROM users WHERE username = ?",
+    `SELECT id, username, nickname, avatar_url, color, status, password_hash, banned, ${USER_ROLE_SELECT_SQL} FROM users WHERE username = ?`,
     [username],
   );
 }
 
 export function findUserById(id) {
   return getRow(
-    "SELECT id, username, nickname, avatar_url, color, status, password_hash, banned, role FROM users WHERE id = ?",
+    `SELECT id, username, nickname, avatar_url, color, status, password_hash, banned, ${USER_ROLE_SELECT_SQL} FROM users WHERE id = ?`,
     [id],
   );
 }
@@ -247,13 +252,13 @@ export function findUserById(id) {
 export function listUsers(excludeUsername) {
   if (excludeUsername) {
     return getAll(
-      "SELECT id, username, nickname, avatar_url, color, status, banned, role FROM users WHERE username != ? ORDER BY username",
+      `SELECT id, username, nickname, avatar_url, color, status, banned, ${USER_ROLE_SELECT_SQL} FROM users WHERE username != ? ORDER BY username`,
       [excludeUsername],
     );
   }
 
   return getAll(
-    "SELECT id, username, nickname, avatar_url, color, status, banned, role FROM users ORDER BY username",
+    `SELECT id, username, nickname, avatar_url, color, status, banned, ${USER_ROLE_SELECT_SQL} FROM users ORDER BY username`,
   );
 }
 
@@ -262,13 +267,13 @@ export function searchUsers(query, excludeUsername) {
 
   if (excludeUsername) {
     return getAll(
-      "SELECT id, username, nickname, avatar_url, color, status, banned, role FROM users WHERE username != ? AND (username LIKE ? OR nickname LIKE ?) ORDER BY username",
+      `SELECT id, username, nickname, avatar_url, color, status, banned, ${USER_ROLE_SELECT_SQL} FROM users WHERE username != ? AND (username LIKE ? OR nickname LIKE ?) ORDER BY username`,
       [excludeUsername, like, like],
     );
   }
 
   return getAll(
-    "SELECT id, username, nickname, avatar_url, color, status, banned, role FROM users WHERE username LIKE ? OR nickname LIKE ? ORDER BY username",
+    `SELECT id, username, nickname, avatar_url, color, status, banned, ${USER_ROLE_SELECT_SQL} FROM users WHERE username LIKE ? OR nickname LIKE ? ORDER BY username`,
     [like, like],
   );
 }
@@ -1636,7 +1641,7 @@ export function getSession(token) {
   return getRow(
     `
     SELECT sessions.id AS session_id, sessions.token, users.id, users.username, users.nickname,
-           users.avatar_url, users.color, users.status, users.banned, users.role
+           users.avatar_url, users.color, users.status, users.banned, ${USER_ROLE_QUALIFIED_SELECT_SQL}
     FROM sessions
     JOIN users ON users.id = sessions.user_id
     WHERE sessions.token = ?
