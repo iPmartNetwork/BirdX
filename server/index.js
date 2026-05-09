@@ -36,6 +36,7 @@ import {
   clearChatMemberLeft,
   clearGroupMemberRemoved,
   createChat,
+  createCallLog,
   createMessageFiles,
   createMessage,
   createOrReuseMessage,
@@ -55,6 +56,7 @@ import {
   hideMessageForUser,
   findUserById,
   findUserByUsername,
+  finishCallLog,
   getMessageReadCounts,
   getMessageAuthors,
   getMessageReadByUser,
@@ -71,6 +73,7 @@ import {
   isMember,
   isGroupMemberRemoved,
   listChatMembers,
+  listCallLogsForChat,
   listChatsForUser,
   listUsers,
   searchUsers,
@@ -83,6 +86,7 @@ import {
   hideChatsForUser,
   markMessagesRead,
   markMessageRead,
+  markCallLogAccepted,
   updateUserPassword,
   updateUserProfile,
   updateUserStatus,
@@ -491,6 +495,7 @@ const apiDeps = {
   clearSessionCookie,
   computeExpiryIso,
   createChat,
+  createCallLog,
   createMessage,
   createOrReuseMessage,
   createMessageFiles,
@@ -516,6 +521,7 @@ const apiDeps = {
   findMessageById,
   findUserById,
   findUserByUsername,
+  finishCallLog,
   fs,
   getMessageReadCounts,
   getMessageAuthors,
@@ -536,6 +542,7 @@ const apiDeps = {
   isGroupMemberRemoved,
   isVideoFileProcessing,
   listPushSubscriptionsByUserIds,
+  listCallLogsForChat,
   listChatMembers,
   listChatsForUser,
   listMessageFilesByMessageIds,
@@ -548,6 +555,7 @@ const apiDeps = {
   markGroupMemberRemoved,
   markMessagesRead,
   markMessageRead,
+  markCallLogAccepted,
   parseCookies,
   parseUploadFileMetadata,
   path,
@@ -835,6 +843,11 @@ function scheduleCallDisconnectEnd(roomId) {
     callDisconnectTimers.delete(roomId);
     activeCalls.delete(roomId);
     liveCalls.delete(roomId);
+    finishCallLog({
+      roomId,
+      status: "disconnect_timeout",
+      reason: "disconnect_timeout",
+    });
     io.to(roomId).emit("call-ended", { roomId, reason: "disconnect_timeout" });
   }, CALL_DISCONNECT_GRACE_MS);
   if (typeof timer.unref === "function") {
@@ -918,12 +931,21 @@ io.on("connection", (socket) => {
     }
   });
 
-  socket.on("leave-call", (roomId) => {
+  socket.on("leave-call", (payload) => {
+    const roomId = typeof payload === "string" ? payload : payload?.roomId;
     if (!roomId) return;
+    const endedByUserId =
+      typeof payload === "object" ? Number(payload?.userId || 0) || null : null;
     console.log("LEAVE CALL:", socket.id, roomId);
     clearCallDisconnectTimer(roomId);
     activeCalls.delete(roomId);
     liveCalls.delete(roomId);
+    finishCallLog({
+      roomId,
+      status: "ended",
+      endedByUserId,
+      reason: "ended",
+    });
     socket.leave(roomId);
     socket.to(roomId).emit("call-ended", { roomId });
   });
@@ -944,6 +966,16 @@ io.on("connection", (socket) => {
     };
 
     activeCalls.set(roomId, payload);
+    const participantUserIds = listChatMembers(payload.chatId)
+      .map((member) => Number(member?.id || 0))
+      .filter(Boolean);
+    createCallLog({
+      chatId: payload.chatId,
+      roomId,
+      callerUserId: payload.callerUserId,
+      participantUserIds,
+      callType: "voice",
+    });
 
     console.log("CALL USER:", socket.id, roomId, callerName);
     console.log(
@@ -959,7 +991,7 @@ io.on("connection", (socket) => {
     console.log("INCOMING CALL EMITTED:", roomId);
   });
 
-  socket.on("accept-call", ({ roomId }) => {
+  socket.on("accept-call", ({ roomId, userId }) => {
     if (!roomId) return;
     console.log("ACCEPT CALL:", socket.id, roomId);
     clearCallDisconnectTimer(roomId);
@@ -969,15 +1001,22 @@ io.on("connection", (socket) => {
     if (activeCall?.callerSocketId) {
       liveCalls.set(roomId, new Set([activeCall.callerSocketId, socket.id]));
     }
+    markCallLogAccepted({ roomId, acceptedByUserId: userId });
     activeCalls.delete(roomId);
     socket.to(roomId).emit("call-accepted", { roomId });
   });
 
-  socket.on("reject-call", ({ roomId }) => {
+  socket.on("reject-call", ({ roomId, userId }) => {
     if (!roomId) return;
     console.log("REJECT CALL:", socket.id, roomId);
     clearCallDisconnectTimer(roomId);
     activeCalls.delete(roomId);
+    finishCallLog({
+      roomId,
+      status: "rejected",
+      endedByUserId: userId,
+      reason: "rejected",
+    });
     socket.to(roomId).emit("call-rejected", { roomId });
   });
 
