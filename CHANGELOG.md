@@ -2,7 +2,7 @@
 
 All notable changes to BirdX are documented in this file.
 
-## v2.4.1 - 2026-05-09
+## v2.4.1rc1 - 2026-05-09
 
 ### Added
 
@@ -18,6 +18,7 @@ All notable changes to BirdX are documented in this file.
 
 ### Fixed
 
+- Fixed a white-screen crash risk when opening group/channel chats with incomplete or non-array member payloads after the role-management UI was added.
 - Reduced cases where mobile voice calls immediately end when the browser socket briefly disconnects.
 
 ## v2.4.0 - 2026-05-09
