@@ -514,7 +514,7 @@ export default function ChatsListPanel({
           const card = (
             <div
               className={`w-full min-h-[72px] rounded-2xl border px-3 py-3 text-left text-sm transition ${
-                activeChatId === conv.id
+                  Number(activeChatId || 0) === Number(conv.id || 0)
                   ? "border-emerald-400 bg-emerald-100 text-emerald-900 dark:border-emerald-400/60 dark:bg-emerald-500/20 dark:text-emerald-100"
                   : "border-slate-300/80 bg-white/90 text-slate-700 hover:border-emerald-300 hover:shadow-[0_0_20px_rgba(16,185,129,0.18)] dark:border-emerald-500/20 dark:bg-slate-950/60 dark:text-slate-200"
               } ${editMode ? "animate-chat-wiggle-ios shadow-[0_0_0_1px_rgba(16,185,129,0.35),0_0_16px_rgba(16,185,129,0.22)]" : ""}`}
