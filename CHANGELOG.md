@@ -2,6 +2,24 @@
 
 All notable changes to BirdX are documented in this file.
 
+## v2.4.1 - 2026-05-09
+
+### Added
+
+- Added owner-controlled group/channel role management from the chat profile member list.
+- Added `owner`, `admin`, `moderator`, and `member` role selection for group/channel members.
+- Added a call resume signal and server-side disconnect grace period so brief mobile screen-lock or background reconnects do not immediately end active calls.
+- Added best-effort Screen Wake Lock support while a voice call is active.
+
+### Changed
+
+- Channel posting permissions now include group/channel owners, admins, and moderators.
+- Voice calls now try to reacquire wake lock and replay remote audio after page focus, pageshow, or visibility changes.
+
+### Fixed
+
+- Reduced cases where mobile voice calls immediately end when the browser socket briefly disconnects.
+
 ## v2.4.0 - 2026-05-09
 
 ### Added
