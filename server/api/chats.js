@@ -98,6 +98,11 @@ function registerChatRoutes(app, deps) {
     });
   };
 
+  const normalizeChatMemberRole = (value) => {
+    const role = String(value || "").trim().toLowerCase();
+    return ["owner", "admin", "moderator", "member"].includes(role) ? role : "member";
+  };
+
   app.get("/api/chats", async (req, res) => {
     const session = requireSession(req, res);
     if (!session) return;
@@ -914,6 +919,68 @@ function registerChatRoutes(app, deps) {
     }
     emitChatListChangedToChatParticipants(chatId, [target.username]);
     return res.json({ ok: true });
+  });
+
+  app.patch("/api/chats/group/:chatId/member-role", (req, res) => {
+    const session = requireSession(req, res);
+    if (!session) return;
+
+    const chatId = Number(req.params?.chatId || 0);
+    const username = req.body?.username?.toString();
+    const targetUsername = req.body?.targetUsername?.toString();
+    const nextRole = normalizeChatMemberRole(req.body?.role);
+    if (!chatId || !username || !targetUsername) {
+      return res.status(400).json({
+        error: "Chat id, username, and targetUsername are required.",
+      });
+    }
+    if (!requireSessionUsernameMatch(res, session, username)) return;
+
+    const actor = findUserByUsername(String(username || "").toLowerCase());
+    const target = findUserByUsername(String(targetUsername || "").toLowerCase());
+    if (!actor || !target) {
+      return res.status(404).json({ error: "User not found." });
+    }
+
+    const chat = findChatById(chatId);
+    if (!chat || (chat.type !== "group" && chat.type !== "channel")) {
+      return res.status(404).json({ error: "Chat not found." });
+    }
+
+    const members = listChatMembers(chatId);
+    const label = chat.type === "channel" ? "channel" : "group";
+    const actorMember = members.find((member) => Number(member.id) === Number(actor.id));
+    if (!actorMember || String(actorMember.role || "").toLowerCase() !== "owner") {
+      return res
+        .status(403)
+        .json({ error: `Only ${label} owner can change member roles.` });
+    }
+
+    const targetMember = members.find((member) => Number(member.id) === Number(target.id));
+    if (!targetMember) {
+      return res.status(400).json({ error: "Target user is not a group member." });
+    }
+
+    const previousRole = normalizeChatMemberRole(targetMember.role);
+    if (previousRole === "owner" && nextRole !== "owner") {
+      const ownerCount = members.filter(
+        (member) => String(member.role || "").toLowerCase() === "owner",
+      ).length;
+      if (ownerCount <= 1) {
+        return res.status(400).json({ error: `At least one ${label} owner is required.` });
+      }
+    }
+
+    setChatMemberRole(chatId, target.id, nextRole);
+    emitChatListChangedToChatParticipants(chatId);
+    return res.json({
+      ok: true,
+      member: {
+        id: Number(target.id),
+        username: target.username,
+        role: nextRole,
+      },
+    });
   });
 
   app.post(
