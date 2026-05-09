@@ -39,7 +39,7 @@ export function useNewGroupModal({
       try {
         setNewGroupSearchLoading(true);
         const res = await searchUsers({
-          exclude: user.username,
+          exclude: user?.username || "",
           query: newGroupSearch.trim().toLowerCase(),
         });
         const data = await res.json();
@@ -47,9 +47,11 @@ export function useNewGroupModal({
           throw new Error(data?.error || "Unable to search users.");
         }
         const selectedUsernames = new Set(
-          newGroupMembers.map((member) => String(member?.username || "")),
+          (Array.isArray(newGroupMembers) ? newGroupMembers : []).map((member) =>
+            String(member?.username || ""),
+          ),
         );
-        const currentEditingChat = chats.find(
+        const currentEditingChat = (Array.isArray(chats) ? chats : []).find(
           (chat) => Number(chat.id) === Number(activeChatId),
         );
         if (
@@ -63,13 +65,13 @@ export function useNewGroupModal({
             const memberUsername = String(member?.username || "").toLowerCase();
             if (
               memberUsername &&
-              memberUsername !== String(user.username || "").toLowerCase()
+              memberUsername !== String(user?.username || "").toLowerCase()
             ) {
               selectedUsernames.add(memberUsername);
             }
           });
         }
-        const users = (data.users || [])
+        const users = (Array.isArray(data.users) ? data.users : [])
           .filter(
             (candidate) =>
               !selectedUsernames.has(
@@ -95,7 +97,7 @@ export function useNewGroupModal({
     newGroupOpen,
     newGroupSearch,
     searchUsers,
-    user.username,
+    user?.username,
   ]);
 
   return {
