@@ -56,7 +56,10 @@ export function useNewGroupModal({
           editingGroup &&
           ["group", "channel"].includes(currentEditingChat?.type)
         ) {
-          (currentEditingChat.members || []).forEach((member) => {
+          const editingMembers = Array.isArray(currentEditingChat?.members)
+            ? currentEditingChat.members
+            : [];
+          editingMembers.forEach((member) => {
             const memberUsername = String(member?.username || "").toLowerCase();
             if (
               memberUsername &&
