@@ -1973,7 +1973,8 @@ export default function ChatPage({ user, setUser, isDark, setIsDark, toggleTheme
       }
     }
     if (String(targetChat.type || "").toLowerCase() === "dm") {
-      const peer = (targetChat.members || []).find(
+      const targetMembers = Array.isArray(targetChat.members) ? targetChat.members : [];
+      const peer = targetMembers.find(
         (member) =>
           String(member?.username || "").toLowerCase() !==
           String(user?.username || "").toLowerCase(),
@@ -3365,7 +3366,7 @@ const peerStatusLabel = !activeHeaderPeer || activeHeaderPeer?.isDeleted
         if (Number(chat?.id) !== Number(activeChat?.id)) return chat;
         return {
           ...chat,
-          members: (chat.members || []).map((member) => {
+          members: (Array.isArray(chat.members) ? chat.members : []).map((member) => {
             const username = String(member?.username || "").toLowerCase();
             const snapshot = presenceStateRef.current.get(username);
             const nextStatus = snapshot
@@ -3746,10 +3747,11 @@ const peerStatusLabel = !activeHeaderPeer || activeHeaderPeer?.isDeleted
       }
       const chat = chats.find((conv) => Number(conv.id) === payloadChatId);
       if (chat?._muted) return;
+      const chatMembers = Array.isArray(chat?.members) ? chat.members : [];
       let title = "New message";
       if (chat) {
         if (chat.type === "dm") {
-          const other = (chat.members || []).find(
+          const other = chatMembers.find(
             (member) => member.username !== user?.username,
           );
           title = other?.nickname || other?.username || "Deleted account";
@@ -3757,7 +3759,7 @@ const peerStatusLabel = !activeHeaderPeer || activeHeaderPeer?.isDeleted
           const groupName = chat.name || "Group";
           const senderLabel = senderName
             ? (() => {
-                const senderMember = (chat.members || []).find(
+                const senderMember = chatMembers.find(
                   (member) =>
                     String(member?.username || "").toLowerCase() ===
                     String(senderName || "").toLowerCase(),
@@ -4529,7 +4531,7 @@ const peerStatusLabel = !activeHeaderPeer || activeHeaderPeer?.isDeleted
         ...conv,
         id: Number(conv.id),
         last_message: normalizeMessageBody(conv.last_message),
-        members: (conv.members || []).map((member) => ({
+        members: (Array.isArray(conv.members) ? conv.members : []).map((member) => ({
           ...member,
           id: Number(member.id),
         })),
@@ -4546,7 +4548,8 @@ const peerStatusLabel = !activeHeaderPeer || activeHeaderPeer?.isDeleted
           deduped.push(chat);
           return;
         }
-        const peer = (chat.members || []).find(
+        const members = Array.isArray(chat.members) ? chat.members : [];
+        const peer = members.find(
           (member) => member.username !== user.username,
         );
         const peerKey = (peer?.username || "").toLowerCase();
@@ -4684,8 +4687,11 @@ const peerStatusLabel = !activeHeaderPeer || activeHeaderPeer?.isDeleted
         if (pendingChat) {
           setActiveChatId(pendingOpenChatId);
           if (pendingChat.type === "dm") {
-            const nextOther = (pendingChat.members || []).find(
-              (member) => member.username !== user.username,
+            const pendingMembers = Array.isArray(pendingChat.members)
+              ? pendingChat.members
+              : [];
+            const nextOther = pendingMembers.find(
+              (member) => member.username !== user?.username,
             );
             setActivePeer(nextOther || null);
           } else {
@@ -6070,7 +6076,8 @@ const peerStatusLabel = !activeHeaderPeer || activeHeaderPeer?.isDeleted
     try {
       const existingDm = chats.find((chat) => {
         if (chat?.type !== "dm") return false;
-        return (chat.members || []).some(
+        const members = Array.isArray(chat.members) ? chat.members : [];
+        return members.some(
           (chatMember) =>
             String(chatMember?.username || "").toLowerCase() === targetUsername,
         );
@@ -6098,7 +6105,10 @@ const peerStatusLabel = !activeHeaderPeer || activeHeaderPeer?.isDeleted
       await loadChats({ silent: true });
 
       const refreshedDm = chats.find((chat) => Number(chat.id) === nextChatId);
-      const nextPeer = (refreshedDm?.members || []).find(
+      const refreshedMembers = Array.isArray(refreshedDm?.members)
+        ? refreshedDm.members
+        : [];
+      const nextPeer = refreshedMembers.find(
         (chatMember) =>
           String(chatMember?.username || "").toLowerCase() === targetUsername,
       );
@@ -6144,7 +6154,7 @@ const peerStatusLabel = !activeHeaderPeer || activeHeaderPeer?.isDeleted
   }
 
   async function handleRemoveGroupMember(member) {
-    if (!activeChat || !["group", "channel"].includes(activeChat.type) || !member?.username)
+    if (!activeChat || !["group", "channel"].includes(activeChat.type) || !member?.username || !user?.username)
       return;
     try {
       const res = await removeGroupMember(activeChat.id, {
@@ -6162,7 +6172,7 @@ const peerStatusLabel = !activeHeaderPeer || activeHeaderPeer?.isDeleted
   }
 
   async function handleChangeGroupMemberRole(member, role) {
-    if (!activeChat || !["group", "channel"].includes(activeChat.type) || !member?.username)
+    if (!activeChat || !["group", "channel"].includes(activeChat.type) || !member?.username || !user?.username)
       return;
     const nextRole = String(role || "").trim().toLowerCase();
     if (!["owner", "admin", "moderator", "member"].includes(nextRole)) return;
