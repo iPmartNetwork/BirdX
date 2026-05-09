@@ -250,6 +250,16 @@ const normalizeChatSummary = (chat) => {
   };
 };
 
+const revokeObjectUrlSafe = (value) => {
+  const url = String(value || "");
+  if (!url) return;
+  try {
+    URL.revokeObjectURL(url);
+  } catch {
+    // Ignore cleanup errors from stale or already-revoked object URLs.
+  }
+};
+
 const pruneMessagesForMemory = (messages) => {
   const list = Array.isArray(messages) ? messages : [];
   if (list.length <= IN_MEMORY_MESSAGES_PER_CHAT) return list;
@@ -2277,9 +2287,7 @@ useEffect(() => {
       if (pendingVoiceMessageRef.current?.previewUrl) {
         URL.revokeObjectURL(pendingVoiceMessageRef.current.previewUrl);
       }
-      if (pendingGroupAvatarFile?.previewUrl) {
-        URL.revokeObjectURL(pendingGroupAvatarFile.previewUrl);
-      }
+      revokeObjectUrlSafe(pendingGroupAvatarFile?.previewUrl);
       messageBlobUrlsRef.current.forEach((url) => {
         try {
           URL.revokeObjectURL(url);
@@ -5746,9 +5754,7 @@ const peerStatusLabel = !activeHeaderPeer || activeHeaderPeer?.isDeleted
     setNewGroupSearch("");
     setNewGroupSearchResults([]);
     setNewGroupMembers([]);
-    if (pendingGroupAvatarFile?.previewUrl) {
-      URL.revokeObjectURL(pendingGroupAvatarFile.previewUrl);
-    }
+    revokeObjectUrlSafe(pendingGroupAvatarFile?.previewUrl);
     setPendingGroupAvatarFile(null);
     setGroupAvatarPreview("");
     setGroupAvatarMarkedForRemoval(false);
@@ -5919,36 +5925,66 @@ const peerStatusLabel = !activeHeaderPeer || activeHeaderPeer?.isDeleted
     }
   };
 
-  const openEditGroupFromProfile = async () => {
-    if (!activeChat || !["group", "channel"].includes(activeChat.type)) return;
-    if (!canCurrentUserEditGroup) return;
-    setEditingGroup(true);
-    setGroupModalType(activeChat.type === "channel" ? "channel" : "group");
-    setProfileModalOpen(false);
-    setNewGroupForm({
-      nickname: activeChat.name || "",
-      username: activeChat.group_username || "",
-      visibility: activeChat.group_visibility || "public",
-      allowMemberInvites: Boolean(Number(activeChat.allow_member_invites || 0)),
-    });
-    setNewGroupMembers([]);
-    setNewGroupSearch("");
-    setGroupAvatarPreview(activeChat.group_avatar_url || "");
-    setGroupAvatarMarkedForRemoval(false);
-    if (pendingGroupAvatarFile?.previewUrl) {
-      URL.revokeObjectURL(pendingGroupAvatarFile.previewUrl);
-    }
-    setPendingGroupAvatarFile(null);
-    setEditGroupInviteLink("");
-    setNewGroupOpen(true);
+  const openEditGroupFromProfile = () => {
     try {
-      const res = await getGroupInviteLink(activeChat.id);
-      const data = await res.json();
-      if (res.ok) {
-        setEditGroupInviteLink(String(data?.inviteLink || ""));
+      const chatId = Number(activeChat?.id || 0);
+      const chatForEdit =
+        (chatId
+          ? chats.find((chat) => Number(chat?.id || 0) === chatId)
+          : null) ||
+        activeChat ||
+        null;
+      const chatType = String(chatForEdit?.type || "").toLowerCase();
+      if (!chatForEdit || !["group", "channel"].includes(chatType)) return;
+      if (!canCurrentUserEditGroup) return;
+
+      const nextForm = {
+        nickname: String(chatForEdit.name || ""),
+        username: String(chatForEdit.group_username || ""),
+        visibility: ["public", "private"].includes(
+          String(chatForEdit.group_visibility || "").toLowerCase(),
+        )
+          ? String(chatForEdit.group_visibility || "").toLowerCase()
+          : "public",
+        allowMemberInvites:
+          chatForEdit.allow_member_invites === true ||
+          chatForEdit.allow_member_invites === 1 ||
+          String(chatForEdit.allow_member_invites || "").toLowerCase() ===
+            "true",
+      };
+
+      revokeObjectUrlSafe(pendingGroupAvatarFile?.previewUrl);
+      setEditingGroup(true);
+      setGroupModalType(chatType === "channel" ? "channel" : "group");
+      setNewGroupForm(nextForm);
+      setNewGroupMembers([]);
+      setNewGroupSearch("");
+      setNewGroupSearchResults([]);
+      setNewGroupError("");
+      setGroupAvatarPreview(String(chatForEdit.group_avatar_url || ""));
+      setGroupAvatarMarkedForRemoval(false);
+      setPendingGroupAvatarFile(null);
+      setEditGroupInviteLink("");
+      setProfileModalOpen(false);
+      setNewGroupOpen(true);
+
+      if (chatId) {
+        void (async () => {
+          try {
+            const res = await getGroupInviteLink(chatId);
+            const data = await res.json();
+            if (res.ok) {
+              setEditGroupInviteLink(String(data?.inviteLink || ""));
+            }
+          } catch {
+            // Ignore invite fetch errors in edit modal.
+          }
+        })();
       }
-    } catch {
-      // ignore invite fetch errors in edit modal
+    } catch (error) {
+      console.error("Failed to open group/channel editor:", error);
+      setProfileError("Unable to open editor.");
+      setProfileModalOpen(false);
     }
   };
 
@@ -5975,9 +6011,7 @@ const peerStatusLabel = !activeHeaderPeer || activeHeaderPeer?.isDeleted
       return;
     }
     const previewUrl = URL.createObjectURL(file);
-    if (pendingGroupAvatarFile?.previewUrl) {
-      URL.revokeObjectURL(pendingGroupAvatarFile.previewUrl);
-    }
+    revokeObjectUrlSafe(pendingGroupAvatarFile?.previewUrl);
     setPendingGroupAvatarFile({ file, previewUrl });
     setGroupAvatarPreview(previewUrl);
     setGroupAvatarMarkedForRemoval(false);
@@ -5986,9 +6020,7 @@ const peerStatusLabel = !activeHeaderPeer || activeHeaderPeer?.isDeleted
   };
 
   const handleGroupAvatarRemove = () => {
-    if (pendingGroupAvatarFile?.previewUrl) {
-      URL.revokeObjectURL(pendingGroupAvatarFile.previewUrl);
-    }
+    revokeObjectUrlSafe(pendingGroupAvatarFile?.previewUrl);
     const hadExistingAvatar = Boolean(
       editingGroup && String(activeChat?.group_avatar_url || "").trim(),
     );
@@ -6021,8 +6053,11 @@ const peerStatusLabel = !activeHeaderPeer || activeHeaderPeer?.isDeleted
   async function handleCreateGroup() {
     const isChannel = groupModalType === "channel";
     const label = isChannel ? "Channel" : "Group";
-    const nickname = newGroupForm.nickname.trim();
-    const username = newGroupForm.username.trim().toLowerCase();
+    const nickname = String(newGroupForm?.nickname || "").trim();
+    const username = String(newGroupForm?.username || "").trim().toLowerCase();
+    const selectedMembers = Array.isArray(newGroupMembers)
+      ? newGroupMembers
+      : [];
     if (!nickname) {
       setNewGroupError(`${label} nickname is required.`);
       return;
@@ -6052,8 +6087,12 @@ const peerStatusLabel = !activeHeaderPeer || activeHeaderPeer?.isDeleted
         creator: user.username,
         nickname,
         username,
-        visibility: newGroupForm.visibility,
-        allowMemberInvites: newGroupForm.allowMemberInvites !== false,
+        visibility: ["public", "private"].includes(
+          String(newGroupForm?.visibility || "").toLowerCase(),
+        )
+          ? String(newGroupForm?.visibility || "").toLowerCase()
+          : "public",
+        allowMemberInvites: newGroupForm?.allowMemberInvites !== false,
         members: editingGroup
           ? Array.from(
               new Set([
@@ -6066,12 +6105,14 @@ const peerStatusLabel = !activeHeaderPeer || activeHeaderPeer?.isDeleted
                       memberUsername &&
                       memberUsername !== String(user.username || "").toLowerCase(),
                   )),
-                ...newGroupMembers
+                ...selectedMembers
                   .map((member) => String(member?.username || "").toLowerCase())
                   .filter(Boolean),
               ]),
             )
-          : newGroupMembers.map((member) => member.username),
+          : selectedMembers
+              .map((member) => String(member?.username || "").toLowerCase())
+              .filter(Boolean),
       };
       const res = editingGroup && activeChat?.id
         ? await (isChannel ? updateChannelChat : updateGroupChat)(activeChat.id, {
@@ -6533,6 +6574,18 @@ const peerStatusLabel = !activeHeaderPeer || activeHeaderPeer?.isDeleted
   const callDurationLabel = formatCallDuration(callDurationSeconds);
   const callIsConnected =
     callState?.status === "connected" || callState?.status === "reconnecting";
+  const safeNewGroupForm = {
+    nickname: String(newGroupForm?.nickname || ""),
+    username: String(newGroupForm?.username || ""),
+    visibility: String(newGroupForm?.visibility || "public"),
+    allowMemberInvites: newGroupForm?.allowMemberInvites !== false,
+  };
+  const safeNewGroupMembers = Array.isArray(newGroupMembers)
+    ? newGroupMembers
+    : [];
+  const safeNewGroupSearchResults = Array.isArray(newGroupSearchResults)
+    ? newGroupSearchResults
+    : [];
   const handleOpenAdminPanel = () => {
     if (typeof window === "undefined") return;
     window.history.pushState({}, "", "/admin");
@@ -6852,13 +6905,13 @@ const peerStatusLabel = !activeHeaderPeer || activeHeaderPeer?.isDeleted
         >
           <NewGroupModal
             open={newGroupOpen}
-            groupForm={newGroupForm}
+            groupForm={safeNewGroupForm}
             setGroupForm={setNewGroupForm}
             groupSearchQuery={newGroupSearch}
             setGroupSearchQuery={setNewGroupSearch}
-            groupSearchResults={newGroupSearchResults}
+            groupSearchResults={safeNewGroupSearchResults}
             groupSearchLoading={newGroupSearchLoading}
-            selectedGroupMembers={newGroupMembers}
+            selectedGroupMembers={safeNewGroupMembers}
             setSelectedGroupMembers={setNewGroupMembers}
             groupError={newGroupError}
             setGroupError={setNewGroupError}
@@ -6874,8 +6927,8 @@ const peerStatusLabel = !activeHeaderPeer || activeHeaderPeer?.isDeleted
             avatarPreview={groupAvatarPreview}
             avatarColor={editingGroup ? activeChat?.group_color || "#10b981" : "#10b981"}
             avatarName={
-              newGroupForm.nickname ||
-              newGroupForm.username ||
+              safeNewGroupForm.nickname ||
+              safeNewGroupForm.username ||
               (groupModalType === "channel" ? "Channel" : "Group")
             }
             onAvatarChange={handleGroupAvatarChange}
