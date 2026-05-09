@@ -1,6 +1,6 @@
 # BirdX
 
-[![Version](https://img.shields.io/badge/version-2.4.2-10b981)](./VERSION)
+[![Version](https://img.shields.io/badge/version-2.5.0-10b981)](./VERSION)
 [![License](https://img.shields.io/badge/license-MIT-blue)](./LICENSE)
 [![Node.js](https://img.shields.io/badge/node-%3E%3D24.0.0-339933)](https://nodejs.org/)
 
@@ -16,9 +16,9 @@ https://github.com/bllackbull/Songbird
 
 ## Current Release
 
-`2.4.2`
+`2.5.0`
 
-This stable release finalizes the group/channel role-management and mobile voice-call reliability fixes, building on the Admin Panel security and operations upgrade: multi-level admin roles, password re-authentication for sensitive actions, stronger audit logging, security event tracking, system health monitoring, production operations, Android PWA reliability, and message reactions.
+This release starts the call experience upgrade, beginning with persistent call history while keeping the group/channel role-management and mobile voice-call reliability fixes from v2.4.2.
 
 ## What BirdX Includes
 
@@ -38,6 +38,7 @@ This stable release finalizes the group/channel role-management and mobile voice
 - Socket.IO signaling for call lifecycle, SDP, and ICE candidates
 - Professional incoming/outgoing call screen
 - Mute, audio retry, call duration, accept, reject, and end controls
+- Per-chat call history for accepted, rejected, ended, and missed/disconnected calls
 - Incoming call ringtone while the app is open
 - Push notifications for incoming calls in PWA/background mode
 - TURN/STUN configuration for reliable audio on mobile carriers and restricted networks
