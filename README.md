@@ -1,6 +1,6 @@
 # BirdX
 
-[![Version](https://img.shields.io/badge/version-2.4.1rc1-10b981)](./VERSION)
+[![Version](https://img.shields.io/badge/version-2.4.2-10b981)](./VERSION)
 [![License](https://img.shields.io/badge/license-MIT-blue)](./LICENSE)
 [![Node.js](https://img.shields.io/badge/node-%3E%3D24.0.0-339933)](https://nodejs.org/)
 
@@ -16,9 +16,9 @@ https://github.com/bllackbull/Songbird
 
 ## Current Release
 
-`2.4.1rc1`
+`2.4.2`
 
-This release candidate focuses on a group/channel role-management bug fix and mobile voice-call reliability, building on the Admin Panel security and operations upgrade: multi-level admin roles, password re-authentication for sensitive actions, stronger audit logging, security event tracking, system health monitoring, production operations, Android PWA reliability, and message reactions.
+This stable release finalizes the group/channel role-management and mobile voice-call reliability fixes, building on the Admin Panel security and operations upgrade: multi-level admin roles, password re-authentication for sensitive actions, stronger audit logging, security event tracking, system health monitoring, production operations, Android PWA reliability, and message reactions.
 
 ## What BirdX Includes
 
