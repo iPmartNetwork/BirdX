@@ -25,6 +25,7 @@ function registerChatRoutes(app, deps) {
     isGroupMemberRemoved,
     isMember,
     isVideoFileProcessing,
+    listCallLogsForChat,
     listChatMembers,
     listChatsForUser,
     listMessageFilesByMessageIds,
@@ -102,6 +103,41 @@ function registerChatRoutes(app, deps) {
     const role = String(value || "").trim().toLowerCase();
     return ["owner", "admin", "moderator", "member"].includes(role) ? role : "member";
   };
+
+  const normalizeCallLog = (call) => ({
+    id: Number(call?.id || 0),
+    chatId: Number(call?.chat_id || 0),
+    roomId: String(call?.room_id || ""),
+    type: String(call?.call_type || "voice"),
+    status: String(call?.status || "ended"),
+    startedAt: call?.started_at || null,
+    acceptedAt: call?.accepted_at || null,
+    endedAt: call?.ended_at || null,
+    durationSeconds: Number(call?.duration_seconds || 0),
+    endReason: call?.end_reason || "",
+    caller: call?.caller_user_id
+      ? {
+          id: Number(call.caller_user_id),
+          username: call.caller_username || "",
+          nickname: call.caller_nickname || call.caller_username || "",
+          avatar_url: ensureAvatarExists(call.caller_user_id, call.caller_avatar_url),
+          color: call.caller_color || "#10b981",
+        }
+      : null,
+    participants: (Array.isArray(call?.participants) ? call.participants : []).map(
+      (participant) => ({
+        id: Number(participant.user_id || 0),
+        username: participant.username || "",
+        nickname: participant.nickname || participant.username || "",
+        avatar_url: ensureAvatarExists(participant.user_id, participant.avatar_url),
+        color: participant.color || "#10b981",
+        role: participant.role || "participant",
+        status: participant.status || "invited",
+        joinedAt: participant.joined_at || null,
+        leftAt: participant.left_at || null,
+      }),
+    ),
+  });
 
   app.get("/api/chats", async (req, res) => {
     const session = requireSession(req, res);
@@ -529,6 +565,30 @@ function registerChatRoutes(app, deps) {
       membersCount: listChatMembers(chatId).length,
       isMember: Boolean(isMemberFlag),
     });
+  });
+
+  app.get("/api/chats/:chatId/calls", (req, res) => {
+    const session = requireSession(req, res);
+    if (!session) return;
+
+    const chatId = Number(req.params.chatId || 0);
+    const username = req.query.username?.toString();
+    const limit = Number(req.query.limit || 30);
+    if (!chatId || !username) {
+      return res.status(400).json({ error: "Chat id and username are required." });
+    }
+    if (!requireSessionUsernameMatch(res, session, username)) return;
+
+    const user = findUserByUsername(username.toLowerCase());
+    if (!user) {
+      return res.status(404).json({ error: "User not found." });
+    }
+    if (!isMember(chatId, user.id)) {
+      return res.status(403).json({ error: "You are not a member of this chat." });
+    }
+
+    const calls = listCallLogsForChat(chatId, limit).map(normalizeCallLog);
+    return res.json({ calls });
   });
 
   app.get("/api/chats/group/:chatId/invite-link", (req, res) => {
