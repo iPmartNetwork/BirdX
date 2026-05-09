@@ -14,6 +14,7 @@ import ChatWindowPanel from "../components/chat/ChatWindowPanel.jsx";
 import { ChatSidebar } from "../components/sidebar/index.js";
 import AppContextMenu from "../components/context-menu/AppContextMenu.jsx";
 import { useAppContextMenu } from "../components/context-menu/useAppContextMenu.js";
+import ChatProfileModal from "../components/modals/ChatProfileModal.jsx";
 import NewGroupModal from "../components/modals/NewGroupModal.jsx";
 import { CHAT_PAGE_CONFIG } from "../settings/chatPageConfig.js";
 import { getAvatarInitials } from "../utils/avatarInitials.js";
@@ -124,7 +125,6 @@ import {
   UPLOAD_PROGRESS_HIDE_DELAY_MS,
 } from "../utils/chatPageConstants.js";
 
-const loadChatProfileModal = () => import("../components/modals/ChatProfileModal.jsx");
 const loadDeleteChatsModal = () => import("../components/modals/DeleteChatsModal.jsx");
 const loadDeleteMessageScopeModal = () =>
   import("../components/modals/DeleteMessageScopeModal.jsx");
@@ -143,7 +143,6 @@ const loadNotificationsSettingsModal = () =>
   }));
 const loadWhatsNewModal = () => import("../components/modals/WhatsNewModal.jsx");
 
-const ChatProfileModal = lazy(loadChatProfileModal);
 const DeleteChatsModal = lazy(loadDeleteChatsModal);
 const DeleteMessageScopeModal = lazy(loadDeleteMessageScopeModal);
 const ForwardMessageModal = lazy(loadForwardMessageModal);
@@ -164,7 +163,6 @@ const preloadChatPageCriticalChunks = () =>
 
 const preloadChatPageLazyChunks = () =>
   Promise.allSettled([
-    loadChatProfileModal(),
     loadDeleteChatsModal(),
     loadDeleteMessageScopeModal(),
     loadForwardMessageModal(),
@@ -6957,7 +6955,11 @@ const peerStatusLabel = !activeHeaderPeer || activeHeaderPeer?.isDeleted
       ) : null}
 
       {profileModalOpen ? (
-        <Suspense fallback={null}>
+        <ModalErrorBoundary
+          resetKey={`profile:${profileModalOpen ? "open" : "closed"}:${mentionProfile?.chatId || activeChat?.id || profileModalMember?.username || "self"}`}
+          title="Unable to open chat profile"
+          onClose={closeProfileModal}
+        >
           <ChatProfileModal
             open={profileModalOpen}
             chat={
@@ -6993,7 +6995,7 @@ const peerStatusLabel = !activeHeaderPeer || activeHeaderPeer?.isDeleted
             onEditGroup={openEditGroupFromProfile}
             onEditSelfProfile={openSelfProfileEditor}
           />
-        </Suspense>
+        </ModalErrorBoundary>
       ) : null}
 
       {notificationsModalOpen ? (
