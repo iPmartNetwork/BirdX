@@ -79,6 +79,7 @@ import {
   deleteGroupChat,
   editMessage,
   fetchHealth,
+  fetchChatCallLogs,
   fetchPresence,
   getChatPreview,
   getGroupInviteLink,
@@ -458,6 +459,8 @@ export default function ChatPage({ user, setUser, isDark, setIsDark, toggleTheme
   const [profileModalOpen, setProfileModalOpen] = useState(false);
   const [profileModalMember, setProfileModalMember] = useState(null);
   const [profileInviteLink, setProfileInviteLink] = useState("");
+  const [profileCallLogs, setProfileCallLogs] = useState([]);
+  const [profileCallLogsLoading, setProfileCallLogsLoading] = useState(false);
   const [mentionProfile, setMentionProfile] = useState(null);
   const [mentionRefreshToken, _setMentionRefreshToken] = useState(0);
   const [editingGroup, setEditingGroup] = useState(false);
@@ -1101,7 +1104,7 @@ export default function ChatPage({ user, setUser, isDark, setIsDark, toggleTheme
       }
       joinCallRoom(roomId, socket);
       await prepareCallPeer(roomId);
-      socket.emit("accept-call", { roomId });
+      socket.emit("accept-call", { roomId, userId: user?.id || null });
       updateCallStatus("connecting", { startedAt: Date.now() });
       await flushPendingOffer();
     } catch (error) {
@@ -1109,7 +1112,7 @@ export default function ChatPage({ user, setUser, isDark, setIsDark, toggleTheme
       if (String(error?.name || "") === "NotAllowedError") {
         setMicrophonePermission("denied");
       }
-      socketRef.current?.emit?.("reject-call", { roomId });
+      socketRef.current?.emit?.("reject-call", { roomId, userId: user?.id || null });
       updateCallStatus("error", { error: getCallErrorMessage(error) });
       scheduleCallReset(2600);
     }
@@ -1118,7 +1121,7 @@ export default function ChatPage({ user, setUser, isDark, setIsDark, toggleTheme
   function rejectIncomingCall() {
     const roomId = incomingCallRef.current?.roomId;
     if (roomId) {
-      socketRef.current?.emit?.("reject-call", { roomId });
+      socketRef.current?.emit?.("reject-call", { roomId, userId: user?.id || null });
     }
     stopIncomingRingtone();
     setSyncedIncomingCall(null);
@@ -1127,7 +1130,7 @@ export default function ChatPage({ user, setUser, isDark, setIsDark, toggleTheme
   function endActiveCall() {
     const roomId = callStateRef.current?.roomId;
     if (roomId) {
-      socketRef.current?.emit?.("leave-call", roomId);
+      socketRef.current?.emit?.("leave-call", { roomId, userId: user?.id || null });
     }
     updateCallStatus("ended");
     scheduleCallReset(450);
@@ -1236,7 +1239,7 @@ export default function ChatPage({ user, setUser, isDark, setIsDark, toggleTheme
       if (!payload?.roomId || payload?.callerSocketId === socket.id) return;
       const activeRoomId = callStateRef.current?.roomId;
       if (activeRoomId && activeRoomId !== payload.roomId) {
-        socket.emit("reject-call", { roomId: payload.roomId });
+        socket.emit("reject-call", { roomId: payload.roomId, userId: user?.id || null });
         return;
       }
       if (activeRoomId === payload.roomId) return;
@@ -5772,13 +5775,41 @@ const peerStatusLabel = !activeHeaderPeer || activeHeaderPeer?.isDeleted
       role: "",
     });
     setProfileInviteLink("");
+    setProfileCallLogs([]);
     setProfileModalOpen(true);
+  };
+
+  const loadProfileCallLogs = async (chatId) => {
+    const targetChatId = Number(chatId || 0);
+    if (!targetChatId || !user?.username) {
+      setProfileCallLogs([]);
+      return;
+    }
+    try {
+      setProfileCallLogsLoading(true);
+      const res = await fetchChatCallLogs({
+        chatId: targetChatId,
+        username: user.username,
+        limit: 12,
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        throw new Error(data?.error || "Unable to load call history.");
+      }
+      setProfileCallLogs(Array.isArray(data?.calls) ? data.calls : []);
+    } catch {
+      setProfileCallLogs([]);
+    } finally {
+      setProfileCallLogsLoading(false);
+    }
   };
 
   const openActiveChatProfile = async () => {
     if (!activeChat) return;
     setProfileModalMember(null);
+    setProfileCallLogs([]);
     setProfileModalOpen(true);
+    void loadProfileCallLogs(activeChat.id);
     if (activeChat.type === "group" || activeChat.type === "channel") {
       try {
         const res = await getGroupInviteLink(activeChat.id);
@@ -5808,12 +5839,14 @@ const peerStatusLabel = !activeHeaderPeer || activeHeaderPeer?.isDeleted
       role: "",
     };
     setProfileModalMember(selected);
+    setProfileCallLogs([]);
     setProfileModalOpen(true);
   };
 
   const openMemberProfileFromList = (member) => {
     if (!member) return;
     setProfileModalMember(member);
+    setProfileCallLogs([]);
     setProfileModalOpen(true);
   };
 
@@ -5883,6 +5916,8 @@ const peerStatusLabel = !activeHeaderPeer || activeHeaderPeer?.isDeleted
     setProfileModalOpen(false);
     setProfileModalMember(null);
     setProfileInviteLink("");
+    setProfileCallLogs([]);
+    setProfileCallLogsLoading(false);
     setMentionProfile(null);
   };
 
@@ -6973,6 +7008,8 @@ const peerStatusLabel = !activeHeaderPeer || activeHeaderPeer?.isDeleted
             muted={activeChatMuted}
             inviteLink={profileInviteLink}
             canViewInvite={canCurrentUserViewInvite}
+            callLogs={profileCallLogs}
+            callLogsLoading={profileCallLogsLoading}
             readOnly={Boolean(
               isMentionProfileReadOnly,
             )}
