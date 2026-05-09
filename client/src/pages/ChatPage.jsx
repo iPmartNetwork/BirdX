@@ -84,6 +84,7 @@ import {
   sendMessage,
   toggleMessageReaction,
   removeGroupMember,
+  updateGroupMemberRole,
   removeGroupAvatar,
   regenerateGroupInviteLink,
   setChatMute,
@@ -462,6 +463,7 @@ export default function ChatPage({ user, setUser, isDark, setIsDark, toggleTheme
   const ringtoneTimersRef = useRef([]);
   const ringtoneActiveRef = useRef(false);
   const incomingCallNotificationRef = useRef(null);
+  const callWakeLockRef = useRef(null);
 
   function setSyncedCallState(value) {
     setCallState((prev) => {
@@ -483,8 +485,43 @@ export default function ChatPage({ user, setUser, isDark, setIsDark, toggleTheme
     const audio = new Audio();
     audio.autoplay = true;
     audio.playsInline = true;
+    audio.setAttribute?.("playsinline", "");
     remoteAudioRef.current = audio;
     return audio;
+  }
+
+  async function requestCallWakeLock() {
+    if (typeof navigator === "undefined" || typeof document === "undefined") return;
+    if (!navigator.wakeLock?.request) return;
+    if (document.visibilityState !== "visible") return;
+    if (callWakeLockRef.current) return;
+    try {
+      const wakeLock = await navigator.wakeLock.request("screen");
+      callWakeLockRef.current = wakeLock;
+      wakeLock.addEventListener?.("release", () => {
+        if (callWakeLockRef.current === wakeLock) {
+          callWakeLockRef.current = null;
+        }
+      });
+    } catch {
+      // Screen Wake Lock is best-effort and may be blocked by the browser or battery mode.
+    }
+  }
+
+  function releaseCallWakeLock() {
+    const wakeLock = callWakeLockRef.current;
+    callWakeLockRef.current = null;
+    try {
+      wakeLock?.release?.();
+    } catch {
+      // ignore wake lock cleanup failures
+    }
+  }
+
+  function replayRemoteAudio() {
+    const audio = remoteAudioRef.current;
+    if (!audio?.srcObject) return;
+    audio.play?.().catch(() => null);
   }
 
   function updateCallStatus(status, patch = {}) {
@@ -664,6 +701,7 @@ export default function ChatPage({ user, setUser, isDark, setIsDark, toggleTheme
   }
 
   function cleanupCallMedia() {
+    releaseCallWakeLock();
     localStreamRef.current?.getTracks?.().forEach((track) => {
       try {
         track.stop();
@@ -1104,6 +1142,10 @@ export default function ChatPage({ user, setUser, isDark, setIsDark, toggleTheme
     socket.on("connect", () => {
       joinedCallRoomsRef.current.clear();
       joinKnownCallRooms(socket);
+      const activeRoomId = callStateRef.current?.roomId;
+      if (activeRoomId) {
+        socket.emit("resume-call", { roomId: activeRoomId });
+      }
     });
 
     socket.on("connect_error", (error) => {
@@ -1217,6 +1259,37 @@ export default function ChatPage({ user, setUser, isDark, setIsDark, toggleTheme
     if (!activeChatId) return;
     joinCallRoom(`chat-${activeChatId}`);
   }, [activeChatId]);
+
+  useEffect(() => {
+    if (!callState?.roomId) {
+      releaseCallWakeLock();
+      return undefined;
+    }
+
+    void requestCallWakeLock();
+    const restoreCallAudio = () => {
+      if (!callStateRef.current?.roomId) return;
+      void requestCallWakeLock();
+      replayRemoteAudio();
+      const roomId = callStateRef.current?.roomId;
+      if (roomId && socketRef.current?.connected) {
+        socketRef.current.emit("resume-call", { roomId });
+      }
+    };
+
+    window.addEventListener("focus", restoreCallAudio);
+    window.addEventListener("pageshow", restoreCallAudio);
+    document.addEventListener("visibilitychange", restoreCallAudio);
+    return () => {
+      window.removeEventListener("focus", restoreCallAudio);
+      window.removeEventListener("pageshow", restoreCallAudio);
+      document.removeEventListener("visibilitychange", restoreCallAudio);
+      if (!callStateRef.current?.roomId) {
+        releaseCallWakeLock();
+      }
+    };
+  }, [callState?.roomId]);
+
   useEffect(() => {
     if (lazyChunksPreloadedRef.current) return;
     let cancelled = false;
@@ -6088,6 +6161,42 @@ const peerStatusLabel = !activeHeaderPeer || activeHeaderPeer?.isDeleted
     }
   }
 
+  async function handleChangeGroupMemberRole(member, role) {
+    if (!activeChat || !["group", "channel"].includes(activeChat.type) || !member?.username)
+      return;
+    const nextRole = String(role || "").trim().toLowerCase();
+    if (!["owner", "admin", "moderator", "member"].includes(nextRole)) return;
+    try {
+      const res = await updateGroupMemberRole(activeChat.id, {
+        username: user.username,
+        targetUsername: member.username,
+        role: nextRole,
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        throw new Error(data?.error || "Unable to change member role.");
+      }
+      setChats((prev) =>
+        prev.map((chat) => {
+          if (Number(chat.id) !== Number(activeChat.id)) return chat;
+          const members = Array.isArray(chat.members) ? chat.members : [];
+          return {
+            ...chat,
+            members: members.map((item) =>
+              String(item.username || "").toLowerCase() ===
+              String(member.username || "").toLowerCase()
+                ? { ...item, role: nextRole }
+                : item,
+            ),
+          };
+        }),
+      );
+      await loadChats({ silent: true });
+    } catch {
+      // ignore
+    }
+  }
+
   async function handleReactMessage(message, reaction) {
     const messageId = Number(message?._serverId || message?.id || 0);
     const normalizedReaction = String(reaction || "").trim();
@@ -6752,6 +6861,7 @@ const peerStatusLabel = !activeHeaderPeer || activeHeaderPeer?.isDeleted
             }
             onOpenMember={openMemberProfileFromList}
             onRemoveMember={handleRemoveGroupMember}
+            onChangeMemberRole={handleChangeGroupMemberRole}
             onOpenUserContextMenu={openContextMenu}
             onEditGroup={openEditGroupFromProfile}
             onEditSelfProfile={openSelfProfileEditor}
@@ -6886,6 +6996,9 @@ const peerStatusLabel = !activeHeaderPeer || activeHeaderPeer?.isDeleted
         {CALL_ICE_SERVERS.some((server) => String([].concat(server.urls || []).join(" ")).includes("turn:"))
           ? "Relay ready for strict mobile networks"
           : "Add a TURN server for the most reliable mobile audio"}
+        <span className="mt-1 block">
+          Keep this screen open during calls; BirdX will try to keep the display awake.
+        </span>
       </div>
     </div>
   </div>
