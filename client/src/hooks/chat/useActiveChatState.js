@@ -62,7 +62,12 @@ export function useActiveChatState({
       Number(member.id) === Number(user?.id || 0) &&
       String(member.role || "").toLowerCase() === "owner",
   );
-  const canSendInActiveChat = !isActiveChannelChat || isActiveOwner;
+  const isActiveManager = activeMembers.some(
+    (member) =>
+      Number(member.id) === Number(user?.id || 0) &&
+      ["owner", "admin", "moderator"].includes(String(member.role || "").toLowerCase()),
+  );
+  const canSendInActiveChat = !isActiveChannelChat || isActiveOwner || isActiveManager;
   const activeGroupMemberUsernames = useMemo(() => {
     if (!isActiveGroupChat && !isActiveChannelChat) return [];
     return (activeMembers || [])
