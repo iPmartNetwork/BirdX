@@ -43,8 +43,8 @@ export function useActiveChatState({
   }, [chats, chatsSearchQuery, user?.username]);
 
   const activeChat =
-    visibleChats.find((conv) => conv.id === activeId) ||
-    chats.find((conv) => conv.id === activeId);
+    visibleChats.find((conv) => Number(conv?.id || 0) === activeId) ||
+    chats.find((conv) => Number(conv?.id || 0) === activeId);
 
   useEffect(() => {
     activeChatTypeRef.current = activeChat?.type || null;
