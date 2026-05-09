@@ -2,6 +2,19 @@
 
 All notable changes to BirdX are documented in this file.
 
+## v2.5.0 - 2026-05-09
+
+### Added
+
+- Started the call experience upgrade with persistent call history foundations.
+- Added database migration `028-call-logs` for call logs and call participants.
+- Added `GET /api/chats/:chatId/calls` for per-chat call history.
+- Added a Call history section to chat profiles.
+
+### Changed
+
+- Voice-call socket events now record started, accepted, rejected, ended, and disconnect-timeout call outcomes.
+
 ## v2.4.2 - 2026-05-09
 
 ### Added
