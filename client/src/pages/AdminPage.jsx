@@ -435,7 +435,7 @@ function ChatDetailDrawer({
           <section className="rounded-lg border border-slate-200 bg-white p-4 dark:border-white/10 dark:bg-slate-900">
             <h3 className="text-sm font-bold">Members and managers</h3>
             <div className="mt-3 divide-y divide-slate-100 dark:divide-white/10">
-              {detail.members?.length ? detail.members.map((member) => (
+              {Array.isArray(detail.members) && detail.members.length ? detail.members.map((member) => (
                 <div key={member.id} className="flex flex-wrap items-center justify-between gap-3 py-3 text-sm">
                   <div>
                     <p className="font-semibold">{member.nickname || member.username}</p>
