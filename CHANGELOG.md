@@ -20,6 +20,7 @@ All notable changes to BirdX are documented in this file.
 
 - Fixed a white-screen crash risk when opening group/channel chats with incomplete or non-array member payloads after the role-management UI was added.
 - Fixed stale cached chat payloads by normalizing chat IDs, member lists, and member roles before rendering group/channel conversations.
+- Fixed group/channel edit opening by loading the edit modal with the main chat page instead of a separate lazy chunk, and added a local modal error boundary so editor failures do not blank the whole app.
 - Reduced cases where mobile voice calls immediately end when the browser socket briefly disconnects.
 
 ## v2.4.0 - 2026-05-09
