@@ -819,6 +819,29 @@ const io = new SocketIOServer(httpServer, {
 
 const activeCalls = new Map();
 const liveCalls = new Map();
+const callDisconnectTimers = new Map();
+const CALL_DISCONNECT_GRACE_MS = 45000;
+
+function clearCallDisconnectTimer(roomId) {
+  const timer = callDisconnectTimers.get(roomId);
+  if (!timer) return;
+  clearTimeout(timer);
+  callDisconnectTimers.delete(roomId);
+}
+
+function scheduleCallDisconnectEnd(roomId) {
+  if (!roomId || callDisconnectTimers.has(roomId)) return;
+  const timer = setTimeout(() => {
+    callDisconnectTimers.delete(roomId);
+    activeCalls.delete(roomId);
+    liveCalls.delete(roomId);
+    io.to(roomId).emit("call-ended", { roomId, reason: "disconnect_timeout" });
+  }, CALL_DISCONNECT_GRACE_MS);
+  if (typeof timer.unref === "function") {
+    timer.unref();
+  }
+  callDisconnectTimers.set(roomId, timer);
+}
 
 function parseCallRoomChatId(roomId) {
   const match = String(roomId || "").match(/^chat-(\d+)$/);
@@ -883,9 +906,22 @@ io.on("connection", (socket) => {
     }
   });
 
+  socket.on("resume-call", ({ roomId }) => {
+    if (!roomId) return;
+    console.log("RESUME CALL:", socket.id, roomId);
+    socket.join(roomId);
+    socketCallRooms.add(roomId);
+    clearCallDisconnectTimer(roomId);
+    const participants = liveCalls.get(roomId);
+    if (participants) {
+      participants.add(socket.id);
+    }
+  });
+
   socket.on("leave-call", (roomId) => {
     if (!roomId) return;
     console.log("LEAVE CALL:", socket.id, roomId);
+    clearCallDisconnectTimer(roomId);
     activeCalls.delete(roomId);
     liveCalls.delete(roomId);
     socket.leave(roomId);
@@ -894,6 +930,7 @@ io.on("connection", (socket) => {
 
   socket.on("call-user", ({ roomId, chatId, callerUserId, callerUsername, callerName }) => {
     if (!roomId) return;
+    clearCallDisconnectTimer(roomId);
     socket.join(roomId);
     socketCallRooms.add(roomId);
 
@@ -925,6 +962,7 @@ io.on("connection", (socket) => {
   socket.on("accept-call", ({ roomId }) => {
     if (!roomId) return;
     console.log("ACCEPT CALL:", socket.id, roomId);
+    clearCallDisconnectTimer(roomId);
     socket.join(roomId);
     socketCallRooms.add(roomId);
     const activeCall = activeCalls.get(roomId);
@@ -938,6 +976,7 @@ io.on("connection", (socket) => {
   socket.on("reject-call", ({ roomId }) => {
     if (!roomId) return;
     console.log("REJECT CALL:", socket.id, roomId);
+    clearCallDisconnectTimer(roomId);
     activeCalls.delete(roomId);
     socket.to(roomId).emit("call-rejected", { roomId });
   });
@@ -963,15 +1002,14 @@ io.on("connection", (socket) => {
     console.log("SOCKET DISCONNECTED:", socket.id);
     for (const [roomId, activeCall] of activeCalls.entries()) {
       if (activeCall?.callerSocketId === socket.id) {
-        activeCalls.delete(roomId);
-        socket.to(roomId).emit("call-ended", { roomId });
+        scheduleCallDisconnectEnd(roomId);
       }
     }
     for (const roomId of socketCallRooms) {
       const participants = liveCalls.get(roomId);
       if (!participants?.has(socket.id)) continue;
-      liveCalls.delete(roomId);
-      socket.to(roomId).emit("call-ended", { roomId });
+      participants.delete(socket.id);
+      scheduleCallDisconnectEnd(roomId);
     }
   });
 });
