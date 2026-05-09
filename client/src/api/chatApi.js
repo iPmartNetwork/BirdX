@@ -342,6 +342,13 @@ export const getChatPreview = ({ chatId, username }) =>
     )}`,
   );
 
+export const fetchChatCallLogs = ({ chatId, username, limit = 30 }) =>
+  apiFetch(
+    `${API_BASE}/api/chats/${encodeURIComponent(chatId)}/calls?username=${encodeURIComponent(
+      username,
+    )}&limit=${encodeURIComponent(limit)}`,
+  );
+
 export const uploadGroupAvatar = (chatId, payload) =>
   apiFetch(`${API_BASE}/api/chats/group/${encodeURIComponent(chatId)}/avatar`, {
     method: "POST",
