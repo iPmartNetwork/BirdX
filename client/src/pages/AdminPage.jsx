@@ -1,22 +1,29 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import {
+  addAdminChatMember,
   createAdminBackup,
   deleteAdminBackup,
   deleteAdminChat,
+  deleteAdminChatMember,
   deleteAdminFile,
   deleteAdminUser,
   deleteAdminUserSession,
   deleteAdminUserSessions,
   fetchAdminAuditLogs,
   fetchAdminBackups,
+  fetchAdminChatDetail,
   fetchAdminChats,
   fetchAdminFiles,
   fetchAdminOverview,
+  fetchAdminSecuritySummary,
   fetchAdminSettings,
+  fetchAdminSystemHealth,
   fetchAdminUserDetail,
   fetchAdminUsers,
   getAdminBackupDownloadUrl,
   resetAdminUserPassword,
+  updateAdminChatMember,
+  updateAdminChatSettings,
   updateAdminUser,
 } from "../api/chatApi.js";
 import {
@@ -25,8 +32,10 @@ import {
   Database,
   Download,
   File,
+  Globe,
   Lock,
   Moon,
+  Pencil,
   Refresh,
   Search,
   Settings,
@@ -34,15 +43,18 @@ import {
   Sun,
   Trash,
   User,
+  UserPlus,
   Users,
 } from "../icons/lucide.js";
 
 const PAGE_SIZE = 25;
 const ADMIN_ROLE_OPTIONS = ["owner", "admin", "moderator", "support", "user"];
 const ADMIN_ACCESS_ROLES = ADMIN_ROLE_OPTIONS.filter((role) => role !== "user");
+const CHAT_ROLE_OPTIONS = ["owner", "admin", "moderator", "member"];
 
 const tabs = [
   { id: "overview", label: "Overview", icon: Database },
+  { id: "monitor", label: "Monitor", icon: Globe },
   { id: "users", label: "Users", icon: Users },
   { id: "chats", label: "Chats", icon: Chat },
   { id: "files", label: "Files", icon: File },
@@ -88,6 +100,41 @@ function StatCard({ label, value, detail, icon: Icon }) {
       </div>
     </section>
   );
+}
+
+function ResourceMeter({ label, percent = 0, detail, status = "healthy", icon: Icon }) {
+  const value = Math.max(0, Math.min(100, Number(percent || 0)));
+  const color =
+    status === "critical"
+      ? "bg-rose-500"
+      : status === "warning"
+        ? "bg-amber-500"
+        : "bg-emerald-500";
+  return (
+    <section className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm dark:border-white/10 dark:bg-slate-950">
+      <div className="flex items-start justify-between gap-3">
+        <div>
+          <p className="text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">{label}</p>
+          <p className="mt-2 text-3xl font-bold">{Math.round(value)}%</p>
+          <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">{detail}</p>
+        </div>
+        {Icon ? <Icon className="text-emerald-500" size={22} /> : null}
+      </div>
+      <div className="mt-4 h-2 rounded-full bg-slate-100 dark:bg-white/10">
+        <div className={`h-2 rounded-full ${color}`} style={{ width: `${value}%` }} />
+      </div>
+    </section>
+  );
+}
+
+function formatDuration(seconds = 0) {
+  const value = Math.max(0, Number(seconds || 0));
+  const days = Math.floor(value / 86400);
+  const hours = Math.floor((value % 86400) / 3600);
+  const minutes = Math.floor((value % 3600) / 60);
+  if (days) return `${days}d ${hours}h`;
+  if (hours) return `${hours}h ${minutes}m`;
+  return `${minutes}m`;
 }
 
 function EmptyState({ text }) {
@@ -292,6 +339,126 @@ function UserDetailDrawer({ detail, onClose, onRevokeSession, onRevokeAllSession
   );
 }
 
+function ChatDetailDrawer({
+  detail,
+  onClose,
+  onSaveSettings,
+  onAddMember,
+  onChangeMemberRole,
+  onRemoveMember,
+}) {
+  const [visibility, setVisibility] = useState("public");
+  const [username, setUsername] = useState("");
+  const [allowInvites, setAllowInvites] = useState(true);
+  const [memberUsername, setMemberUsername] = useState("");
+  const [memberRole, setMemberRole] = useState("admin");
+
+  useEffect(() => {
+    if (!detail?.chat) return;
+    setVisibility(detail.chat.group_visibility || "public");
+    setUsername(detail.chat.group_username || "");
+    setAllowInvites(Boolean(detail.chat.allow_member_invites));
+    setMemberUsername("");
+    setMemberRole("admin");
+  }, [detail]);
+
+  if (!detail) return null;
+  const chat = detail.chat || {};
+  return (
+    <div className="fixed inset-0 z-[430] bg-slate-950/40 backdrop-blur-sm">
+      <aside className="ml-auto flex h-full w-full max-w-2xl flex-col overflow-hidden border-l border-slate-200 bg-white shadow-2xl dark:border-white/10 dark:bg-slate-950">
+        <header className="border-b border-slate-200 p-5 dark:border-white/10">
+          <div className="flex items-start justify-between gap-3">
+            <div>
+              <p className="text-xs font-semibold uppercase tracking-wide text-emerald-600 dark:text-emerald-300">
+                Chat administration
+              </p>
+              <h2 className="mt-1 text-xl font-bold">{chat.name || `${chat.type} #${chat.id}`}</h2>
+              <p className="text-sm text-slate-500 dark:text-slate-400">
+                {chat.type} / {chat.group_visibility || "public"} / {chat.group_username || "no username"}
+              </p>
+            </div>
+            <button type="button" onClick={onClose} className="rounded-lg border border-slate-200 px-3 py-2 text-sm font-semibold dark:border-white/10">
+              Close
+            </button>
+          </div>
+        </header>
+        <div className="app-scroll flex-1 space-y-4 overflow-auto p-5">
+          <div className="grid gap-3 sm:grid-cols-4">
+            <StatCard label="Members" value={detail.stats?.members || 0} icon={Users} />
+            <StatCard label="Admins" value={detail.stats?.admins || 0} icon={ShieldCheck} />
+            <StatCard label="Messages" value={detail.stats?.messages || 0} icon={Database} />
+            <StatCard label="Files" value={detail.stats?.files || 0} icon={File} />
+          </div>
+
+          <section className="rounded-lg border border-slate-200 bg-white p-4 dark:border-white/10 dark:bg-slate-900">
+            <div className="flex flex-wrap items-end gap-3">
+              <label className="min-w-[140px] flex-1">
+                <span className="text-xs font-bold uppercase tracking-wide text-slate-500">Visibility</span>
+                <select value={visibility} onChange={(event) => setVisibility(event.target.value)} className="mt-2 h-10 w-full rounded-lg border border-slate-200 bg-white px-3 text-sm dark:border-white/10 dark:bg-slate-950">
+                  <option value="public">Public</option>
+                  <option value="private">Private</option>
+                </select>
+              </label>
+              <label className="min-w-[180px] flex-[2]">
+                <span className="text-xs font-bold uppercase tracking-wide text-slate-500">Public username</span>
+                <input value={username} onChange={(event) => setUsername(event.target.value)} placeholder="channelname" className="mt-2 h-10 w-full rounded-lg border border-slate-200 bg-white px-3 text-sm dark:border-white/10 dark:bg-slate-950" />
+              </label>
+              <label className="flex min-w-[160px] items-center gap-2 rounded-lg border border-slate-200 px-3 py-2 text-sm font-semibold dark:border-white/10">
+                <input type="checkbox" checked={allowInvites} onChange={(event) => setAllowInvites(event.target.checked)} />
+                Invite links
+              </label>
+              <button type="button" onClick={() => onSaveSettings({ groupVisibility: visibility, groupUsername: username, allowMemberInvites: allowInvites })} className="inline-flex h-10 items-center gap-2 rounded-lg bg-emerald-500 px-4 text-sm font-semibold text-white">
+                <Pencil size={15} />Save
+              </button>
+            </div>
+          </section>
+
+          <section className="rounded-lg border border-slate-200 bg-white p-4 dark:border-white/10 dark:bg-slate-900">
+            <div className="flex flex-wrap items-end gap-3">
+              <label className="min-w-[180px] flex-1">
+                <span className="text-xs font-bold uppercase tracking-wide text-slate-500">Username</span>
+                <input value={memberUsername} onChange={(event) => setMemberUsername(event.target.value)} placeholder="username" className="mt-2 h-10 w-full rounded-lg border border-slate-200 bg-white px-3 text-sm dark:border-white/10 dark:bg-slate-950" />
+              </label>
+              <label className="min-w-[150px]">
+                <span className="text-xs font-bold uppercase tracking-wide text-slate-500">Role</span>
+                <select value={memberRole} onChange={(event) => setMemberRole(event.target.value)} className="mt-2 h-10 w-full rounded-lg border border-slate-200 bg-white px-3 text-sm dark:border-white/10 dark:bg-slate-950">
+                  {CHAT_ROLE_OPTIONS.map((role) => <option key={role} value={role}>{role}</option>)}
+                </select>
+              </label>
+              <button type="button" onClick={() => onAddMember({ username: memberUsername, role: memberRole })} className="inline-flex h-10 items-center gap-2 rounded-lg bg-emerald-500 px-4 text-sm font-semibold text-white">
+                <UserPlus size={15} />Add
+              </button>
+            </div>
+          </section>
+
+          <section className="rounded-lg border border-slate-200 bg-white p-4 dark:border-white/10 dark:bg-slate-900">
+            <h3 className="text-sm font-bold">Members and managers</h3>
+            <div className="mt-3 divide-y divide-slate-100 dark:divide-white/10">
+              {detail.members?.length ? detail.members.map((member) => (
+                <div key={member.id} className="flex flex-wrap items-center justify-between gap-3 py-3 text-sm">
+                  <div>
+                    <p className="font-semibold">{member.nickname || member.username}</p>
+                    <p className="text-xs text-slate-500 dark:text-slate-400">@{member.username} / {member.status || "offline"}</p>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <select value={member.role} onChange={(event) => onChangeMemberRole(member, event.target.value)} className="h-9 rounded-lg border border-slate-200 bg-white px-2 text-sm font-semibold dark:border-white/10 dark:bg-slate-950">
+                      {CHAT_ROLE_OPTIONS.map((role) => <option key={role} value={role}>{role}</option>)}
+                    </select>
+                    <button type="button" onClick={() => onRemoveMember(member)} className="inline-flex h-9 items-center gap-1 rounded-lg border border-rose-200 px-2 text-xs font-bold text-rose-600 dark:border-rose-500/30">
+                      <Trash size={14} />Remove
+                    </button>
+                  </div>
+                </div>
+              )) : <p className="py-3 text-sm text-slate-500">No members found.</p>}
+            </div>
+          </section>
+        </div>
+      </aside>
+    </div>
+  );
+}
+
 export default function AdminPage({ user, isDark, onToggleTheme, onNavigate }) {
   const [activeTab, setActiveTab] = useState("overview");
   const [overview, setOverview] = useState(null);
@@ -301,15 +468,18 @@ export default function AdminPage({ user, isDark, onToggleTheme, onNavigate }) {
   const [auditLogs, setAuditLogs] = useState([]);
   const [settings, setSettings] = useState(null);
   const [backups, setBackups] = useState([]);
+  const [systemHealth, setSystemHealth] = useState(null);
+  const [securitySummary, setSecuritySummary] = useState(null);
   const [userPagination, setUserPagination] = useState(null);
   const [chatPagination, setChatPagination] = useState(null);
   const [filePagination, setFilePagination] = useState(null);
   const [auditPagination, setAuditPagination] = useState(null);
   const [userFilters, setUserFilters] = useState({ query: "", role: "", status: "", sort: "newest", page: 1 });
-  const [chatFilters, setChatFilters] = useState({ query: "", type: "", sort: "newest", page: 1 });
+  const [chatFilters, setChatFilters] = useState({ query: "", type: "", visibility: "", sort: "newest", page: 1 });
   const [fileFilters, setFileFilters] = useState({ query: "", kind: "", page: 1 });
   const [auditFilters, setAuditFilters] = useState({ action: "", actor: "", targetType: "", page: 1 });
   const [userDetail, setUserDetail] = useState(null);
+  const [chatDetail, setChatDetail] = useState(null);
   const [loading, setLoading] = useState(true);
   const [busyKey, setBusyKey] = useState("");
   const [error, setError] = useState("");
@@ -322,6 +492,16 @@ export default function AdminPage({ user, isDark, onToggleTheme, onNavigate }) {
   const loadOverview = useCallback(async () => {
     const data = await readJsonResponse(await fetchAdminOverview());
     setOverview(data);
+  }, []);
+
+  const loadSystemHealth = useCallback(async () => {
+    const data = await readJsonResponse(await fetchAdminSystemHealth());
+    setSystemHealth(data.system || null);
+  }, []);
+
+  const loadSecuritySummary = useCallback(async () => {
+    const data = await readJsonResponse(await fetchAdminSecuritySummary());
+    setSecuritySummary(data.security || null);
   }, []);
 
   const loadUsers = useCallback(async () => {
@@ -364,6 +544,8 @@ export default function AdminPage({ user, isDark, onToggleTheme, onNavigate }) {
     setError("");
     const tasks = [
       ["overview", loadOverview],
+      ["system", loadSystemHealth],
+      ["security", loadSecuritySummary],
       ["users", loadUsers],
       ["chats", loadChats],
       ["files", loadFiles],
@@ -388,7 +570,7 @@ export default function AdminPage({ user, isDark, onToggleTheme, onNavigate }) {
       }
     }
     setLoading(false);
-  }, [isAdmin, loadAudit, loadBackups, loadChats, loadFiles, loadOverview, loadSettings, loadUsers]);
+  }, [isAdmin, loadAudit, loadBackups, loadChats, loadFiles, loadOverview, loadSecuritySummary, loadSettings, loadSystemHealth, loadUsers]);
 
   useEffect(() => {
     void loadAll();
@@ -406,6 +588,16 @@ export default function AdminPage({ user, isDark, onToggleTheme, onNavigate }) {
   useEffect(() => {
     if (activeTab === "audit") void loadAudit().catch((err) => setError(err.message));
   }, [activeTab, loadAudit]);
+  useEffect(() => {
+    if (activeTab !== "monitor") return undefined;
+    void loadSystemHealth().catch((err) => setError(err.message));
+    void loadSecuritySummary().catch((err) => setError(err.message));
+    const timer = window.setInterval(() => {
+      void loadSystemHealth().catch(() => {});
+      void loadSecuritySummary().catch(() => {});
+    }, 30000);
+    return () => window.clearInterval(timer);
+  }, [activeTab, loadSecuritySummary, loadSystemHealth]);
 
   const runAction = async (key, handler, refresh = loadAll) => {
     setBusyKey(key);
@@ -429,6 +621,28 @@ export default function AdminPage({ user, isDark, onToggleTheme, onNavigate }) {
       setUserDetail(data);
     } catch (err) {
       setError(err?.message || "Unable to load user detail.");
+    } finally {
+      setBusyKey("");
+    }
+  };
+
+  const loadChatDetail = useCallback(async (chatId) => {
+    const data = await readJsonResponse(await fetchAdminChatDetail(chatId));
+    setChatDetail(data);
+    return data;
+  }, []);
+
+  const openChatDetail = async (item) => {
+    if (!["group", "channel"].includes(String(item.type || "").toLowerCase())) {
+      setError("Only groups and channels have admin details.");
+      return;
+    }
+    setBusyKey(`chat-detail-${item.id}`);
+    setError("");
+    try {
+      await loadChatDetail(item.id);
+    } catch (err) {
+      setError(err?.message || "Unable to load chat detail.");
     } finally {
       setBusyKey("");
     }
@@ -577,6 +791,101 @@ export default function AdminPage({ user, isDark, onToggleTheme, onNavigate }) {
             </div>
           ) : null}
 
+          {!loading && activeTab === "monitor" ? (
+            <div className="space-y-5">
+              <div className="grid gap-3 md:grid-cols-3">
+                <ResourceMeter
+                  label="CPU"
+                  percent={systemHealth?.cpu?.percent || 0}
+                  detail={`${systemHealth?.cpu?.cores || 0} cores / ${systemHealth?.cpu?.model || "unknown CPU"}`}
+                  status={systemHealth?.cpu?.status}
+                  icon={Globe}
+                />
+                <ResourceMeter
+                  label="Memory"
+                  percent={systemHealth?.memory?.percent || 0}
+                  detail={`${systemHealth?.memory?.usedLabel || "0 B"} of ${systemHealth?.memory?.totalLabel || "0 B"}`}
+                  status={systemHealth?.memory?.status}
+                  icon={Database}
+                />
+                <ResourceMeter
+                  label="Disk"
+                  percent={systemHealth?.disk?.percent || 0}
+                  detail={`${systemHealth?.disk?.usedLabel || "0 B"} of ${systemHealth?.disk?.totalLabel || "0 B"}`}
+                  status={systemHealth?.disk?.status}
+                  icon={File}
+                />
+              </div>
+
+              <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+                <StatCard label="App uptime" value={formatDuration(systemHealth?.runtime?.uptimeSeconds || 0)} detail={`System ${formatDuration(systemHealth?.runtime?.systemUptimeSeconds || 0)}`} icon={Refresh} />
+                <StatCard label="Runtime" value={systemHealth?.runtime?.nodeVersion || "-"} detail={`${systemHealth?.runtime?.platform || "-"} / ${systemHealth?.runtime?.arch || "-"}`} icon={Settings} />
+                <StatCard label="Database" value={systemHealth?.services?.database?.sizeLabel || "0 B"} detail={systemHealth?.services?.database?.exists ? "Database file found" : "Database file missing"} icon={Database} />
+                <StatCard label="Uploads" value={systemHealth?.services?.uploads?.sizeLabel || "0 B"} detail={`${systemHealth?.services?.backups?.count || 0} backups stored`} icon={Download} />
+              </div>
+
+              <div className="grid gap-4 xl:grid-cols-[1fr_1.2fr]">
+                <section className="rounded-lg border border-slate-200 bg-white p-4 dark:border-white/10 dark:bg-slate-950">
+                  <h2 className="text-sm font-bold">Security summary</h2>
+                  <div className="mt-3 grid gap-3 sm:grid-cols-2">
+                    <StatCard label="Failed logins" value={securitySummary?.failedLogins24h || 0} detail="Last 24 hours" icon={Lock} />
+                    <StatCard label="Banned logins" value={securitySummary?.bannedLogins24h || 0} detail="Last 24 hours" icon={Ban} />
+                    <StatCard label="Failed reauth" value={securitySummary?.failedReauth24h || 0} detail="Admin password checks" icon={ShieldCheck} />
+                    <StatCard label="Sensitive actions" value={securitySummary?.sensitiveActions24h || 0} detail={`${securitySummary?.activeAdminSessions || 0} admin sessions`} icon={Settings} />
+                  </div>
+                  <div className="mt-4">
+                    <h3 className="text-xs font-bold uppercase text-slate-500 dark:text-slate-400">Top source IPs</h3>
+                    <div className="mt-2 divide-y divide-slate-100 dark:divide-white/10">
+                      {securitySummary?.topIps?.length ? securitySummary.topIps.map((item) => (
+                        <div key={item.ip} className="flex items-center justify-between gap-3 py-2 text-sm">
+                          <span className="font-semibold">{item.ip}</span>
+                          <span className="rounded-full bg-slate-100 px-2 py-1 text-xs font-bold text-slate-600 dark:bg-white/10 dark:text-slate-300">{item.count}</span>
+                        </div>
+                      )) : <p className="py-3 text-sm text-slate-500">No security events in the last day.</p>}
+                    </div>
+                  </div>
+                </section>
+
+                <section className="rounded-lg border border-slate-200 bg-white p-4 dark:border-white/10 dark:bg-slate-950">
+                  <h2 className="text-sm font-bold">Recent security activity</h2>
+                  <div className="mt-3 divide-y divide-slate-100 dark:divide-white/10">
+                    {securitySummary?.recentEvents?.length ? securitySummary.recentEvents.map((event) => (
+                      <div key={`event-${event.id}`} className="py-3 text-sm">
+                        <div className="flex flex-wrap items-center justify-between gap-2">
+                          <p className="font-bold">{event.type}</p>
+                          <span className="text-xs text-slate-500 dark:text-slate-400">{event.created_at}</span>
+                        </div>
+                        <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">
+                          @{event.username || "-"} / IP {event.ip_address || "-"}
+                        </p>
+                      </div>
+                    )) : <EmptyState text="No recent security events." />}
+                  </div>
+                </section>
+              </div>
+
+              <section className="rounded-lg border border-slate-200 bg-white p-4 dark:border-white/10 dark:bg-slate-950">
+                <h2 className="text-sm font-bold">Sensitive admin actions</h2>
+                <div className="mt-3 divide-y divide-slate-100 dark:divide-white/10">
+                  {securitySummary?.recentSensitiveActions?.length ? securitySummary.recentSensitiveActions.map((item) => (
+                    <div key={`sensitive-${item.id}`} className="flex flex-wrap items-center justify-between gap-3 py-3 text-sm">
+                      <div>
+                        <p className="font-bold">
+                          {item.action}
+                          {!item.success ? <span className="ml-2 rounded-full bg-rose-100 px-2 py-0.5 text-xs text-rose-700 dark:bg-rose-500/10 dark:text-rose-200">failed</span> : null}
+                        </p>
+                        <p className="text-xs text-slate-500 dark:text-slate-400">
+                          {item.actor_username || "system"} / {item.target_type || "-"} #{item.target_id || "-"} / IP {item.ip_address || "-"}
+                        </p>
+                      </div>
+                      <span className="text-xs text-slate-500 dark:text-slate-400">{item.created_at}</span>
+                    </div>
+                  )) : <EmptyState text="No sensitive actions found." />}
+                </div>
+              </section>
+            </div>
+          ) : null}
+
           {!loading && activeTab === "users" ? (
             <div className="space-y-4">
               <div className="grid gap-2 rounded-lg border border-slate-200 bg-white p-3 dark:border-white/10 dark:bg-slate-950 md:grid-cols-[1fr_140px_140px_160px_auto]">
@@ -683,10 +992,13 @@ export default function AdminPage({ user, isDark, onToggleTheme, onNavigate }) {
 
           {!loading && activeTab === "chats" ? (
             <div className="space-y-4">
-              <div className="grid gap-2 rounded-lg border border-slate-200 bg-white p-3 dark:border-white/10 dark:bg-slate-950 md:grid-cols-[1fr_140px_160px_auto]">
+              <div className="grid gap-2 rounded-lg border border-slate-200 bg-white p-3 dark:border-white/10 dark:bg-slate-950 md:grid-cols-[1fr_140px_140px_160px_auto]">
                 <input value={chatFilters.query} onChange={(event) => setChatFilters((prev) => ({ ...prev, query: event.target.value, page: 1 }))} placeholder="Search chats" className="h-10 rounded-lg border border-slate-200 bg-white px-3 text-sm outline-none focus:border-emerald-400 dark:border-white/10 dark:bg-slate-900" />
                 <select value={chatFilters.type} onChange={(event) => setChatFilters((prev) => ({ ...prev, type: event.target.value, page: 1 }))} className="h-10 rounded-lg border border-slate-200 bg-white px-3 text-sm dark:border-white/10 dark:bg-slate-900">
                   <option value="">All types</option><option value="dm">DM</option><option value="group">Group</option><option value="channel">Channel</option><option value="saved">Saved</option>
+                </select>
+                <select value={chatFilters.visibility} onChange={(event) => setChatFilters((prev) => ({ ...prev, visibility: event.target.value, page: 1 }))} className="h-10 rounded-lg border border-slate-200 bg-white px-3 text-sm dark:border-white/10 dark:bg-slate-900">
+                  <option value="">Any visibility</option><option value="public">Public</option><option value="private">Private</option>
                 </select>
                 <select value={chatFilters.sort} onChange={(event) => setChatFilters((prev) => ({ ...prev, sort: event.target.value, page: 1 }))} className="h-10 rounded-lg border border-slate-200 bg-white px-3 text-sm dark:border-white/10 dark:bg-slate-900">
                   <option value="newest">Newest</option><option value="name">Name</option><option value="members">Most members</option><option value="messages">Most messages</option>
@@ -698,9 +1010,14 @@ export default function AdminPage({ user, isDark, onToggleTheme, onNavigate }) {
                   <section key={chat.id} className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-slate-200 bg-white p-4 dark:border-white/10 dark:bg-slate-950">
                     <div>
                       <p className="font-bold">{chat.name || `${chat.type} #${chat.id}`}</p>
-                      <p className="text-xs text-slate-500 dark:text-slate-400">{chat.type} / {chat.group_username || "no username"} / {chat.member_count} members / {chat.message_count} messages</p>
+                      <p className="text-xs text-slate-500 dark:text-slate-400">{chat.type} / {chat.group_visibility || "private"} / {chat.group_username || "no username"} / {chat.member_count} members / {chat.message_count} messages</p>
                     </div>
-                    <button type="button" onClick={() => confirmAction({ title: "Delete chat", body: `Delete chat #${chat.id}? This cannot be undone.`, confirmLabel: "Delete", danger: true, requiresPassword: true, run: async ({ adminPassword }) => readJsonResponse(await deleteAdminChat(chat.id, { adminPassword })), refresh: loadChats })} className="inline-flex h-9 items-center gap-2 rounded-lg border border-rose-200 px-3 text-sm font-semibold text-rose-600 dark:border-rose-500/30"><Trash size={15} />Delete</button>
+                    <div className="flex flex-wrap items-center gap-2">
+                      {["group", "channel"].includes(String(chat.type || "").toLowerCase()) ? (
+                        <button type="button" onClick={() => void openChatDetail(chat)} className="inline-flex h-9 items-center gap-2 rounded-lg border border-slate-200 px-3 text-sm font-semibold dark:border-white/10"><Pencil size={15} />Detail</button>
+                      ) : null}
+                      <button type="button" onClick={() => confirmAction({ title: "Delete chat", body: `Delete chat #${chat.id}? This cannot be undone.`, confirmLabel: "Delete", danger: true, requiresPassword: true, run: async ({ adminPassword }) => readJsonResponse(await deleteAdminChat(chat.id, { adminPassword })), refresh: loadChats })} className="inline-flex h-9 items-center gap-2 rounded-lg border border-rose-200 px-3 text-sm font-semibold text-rose-600 dark:border-rose-500/30"><Trash size={15} />Delete</button>
+                    </div>
                   </section>
                 )) : <EmptyState text="No chats found." />}
               </div>
@@ -835,6 +1152,63 @@ export default function AdminPage({ user, isDark, onToggleTheme, onNavigate }) {
               setUserDetail(await readJsonResponse(await fetchAdminUserDetail(detailUser.id)));
             },
             refresh: loadUsers,
+          })
+        }
+      />
+      <ChatDetailDrawer
+        detail={chatDetail}
+        onClose={() => setChatDetail(null)}
+        onSaveSettings={(payload) =>
+          confirmAction({
+            title: "Update chat settings",
+            body: `Update settings for ${chatDetail?.chat?.name || `chat #${chatDetail?.chat?.id}`}?`,
+            confirmLabel: "Save",
+            requiresPassword: true,
+            run: async ({ adminPassword }) => {
+              await readJsonResponse(await updateAdminChatSettings(chatDetail.chat.id, { ...payload, adminPassword }));
+              await loadChatDetail(chatDetail.chat.id);
+            },
+            refresh: loadChats,
+          })
+        }
+        onAddMember={(payload) =>
+          confirmAction({
+            title: "Add chat member",
+            body: `Add @${payload.username} as ${payload.role}?`,
+            confirmLabel: "Add",
+            requiresPassword: true,
+            run: async ({ adminPassword }) => {
+              await readJsonResponse(await addAdminChatMember(chatDetail.chat.id, { ...payload, adminPassword }));
+              await loadChatDetail(chatDetail.chat.id);
+            },
+            refresh: loadChats,
+          })
+        }
+        onChangeMemberRole={(member, role) =>
+          confirmAction({
+            title: "Change member role",
+            body: `Change @${member.username} role to ${role}?`,
+            confirmLabel: "Change",
+            requiresPassword: true,
+            run: async ({ adminPassword }) => {
+              await readJsonResponse(await updateAdminChatMember(chatDetail.chat.id, member.id, { role, adminPassword }));
+              await loadChatDetail(chatDetail.chat.id);
+            },
+            refresh: loadChats,
+          })
+        }
+        onRemoveMember={(member) =>
+          confirmAction({
+            title: "Remove chat member",
+            body: `Remove @${member.username} from this chat?`,
+            confirmLabel: "Remove",
+            danger: true,
+            requiresPassword: true,
+            run: async ({ adminPassword }) => {
+              await readJsonResponse(await deleteAdminChatMember(chatDetail.chat.id, member.id, { adminPassword }));
+              await loadChatDetail(chatDetail.chat.id);
+            },
+            refresh: loadChats,
           })
         }
       />
