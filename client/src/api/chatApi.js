@@ -60,6 +60,10 @@ export const fetchAdminMe = () => apiFetch(`${API_BASE}/api/admin/me`);
 
 export const fetchAdminOverview = () => apiFetch(`${API_BASE}/api/admin/overview`);
 
+export const fetchAdminSystemHealth = () => apiFetch(`${API_BASE}/api/admin/system-health`);
+
+export const fetchAdminSecuritySummary = () => apiFetch(`${API_BASE}/api/admin/security-summary`);
+
 const buildAdminQuery = (params = {}) => {
   const search = new URLSearchParams();
   Object.entries(params || {}).forEach(([key, value]) => {
@@ -109,6 +113,33 @@ export const deleteAdminUserSessions = (userId, payload = {}) =>
 
 export const fetchAdminChats = (params = {}) =>
   apiFetch(`${API_BASE}/api/admin/chats${buildAdminQuery(params)}`);
+
+export const fetchAdminChatDetail = (chatId) =>
+  apiFetch(`${API_BASE}/api/admin/chats/${encodeURIComponent(chatId)}/detail`);
+
+export const updateAdminChatSettings = (chatId, payload = {}) =>
+  apiFetch(
+    `${API_BASE}/api/admin/chats/${encodeURIComponent(chatId)}/settings`,
+    adminJsonOptions("PATCH", payload),
+  );
+
+export const addAdminChatMember = (chatId, payload = {}) =>
+  apiFetch(
+    `${API_BASE}/api/admin/chats/${encodeURIComponent(chatId)}/members`,
+    adminJsonOptions("POST", payload),
+  );
+
+export const updateAdminChatMember = (chatId, userId, payload = {}) =>
+  apiFetch(
+    `${API_BASE}/api/admin/chats/${encodeURIComponent(chatId)}/members/${encodeURIComponent(userId)}`,
+    adminJsonOptions("PATCH", payload),
+  );
+
+export const deleteAdminChatMember = (chatId, userId, payload = {}) =>
+  apiFetch(
+    `${API_BASE}/api/admin/chats/${encodeURIComponent(chatId)}/members/${encodeURIComponent(userId)}`,
+    adminJsonOptions("DELETE", payload),
+  );
 
 export const deleteAdminChat = (chatId, payload = {}) =>
   apiFetch(`${API_BASE}/api/admin/chats/${encodeURIComponent(chatId)}`, adminJsonOptions("DELETE", payload));
