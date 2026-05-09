@@ -53,7 +53,8 @@ export function useAppContextMenu({
       return (
         chats.find((chat) => {
           if (chat?.type !== "dm") return false;
-          return (chat.members || []).some(
+          const members = Array.isArray(chat?.members) ? chat.members : [];
+          return members.some(
             (member) =>
               String(member?.username || "").toLowerCase() === targetUsername,
           );
