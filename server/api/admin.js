@@ -8,6 +8,7 @@ import {
   resolveUserRow,
 } from "../lib/dbToolHelpers.js";
 import { storageEncryption } from "../lib/storageEncryption.js";
+import os from "node:os";
 
 function registerAdminRoutes(app, deps) {
   const {
@@ -22,16 +23,24 @@ function registerAdminRoutes(app, deps) {
     USERNAME_MAX,
     MESSAGE_MAX_CHARS,
     ACCOUNT_CREATION,
+    APP_ENV,
+    VAPID_PUBLIC_KEY,
     USERNAME_REGEX,
     isLoopbackRequest,
     removeAllMessageUploads,
     removeStoredFileNames,
     buildInspectSnapshot,
     buildTimestampSchedule,
+    addChatMember,
+    clearChatMemberLeft,
+    clearGroupMemberRemoved,
+    getChatMemberRole,
+    setChatMemberRole,
     avatarUploadRootDir,
     fs,
     path,
     projectRootDir,
+    uploadRootDir,
     emitChatEvent,
     emitSseEvent,
     ADMIN_USERNAMES = [],
@@ -98,6 +107,29 @@ function registerAdminRoutes(app, deps) {
         adminRun("ALTER TABLE admin_audit_logs ADD COLUMN success INTEGER NOT NULL DEFAULT 1");
       }
 
+      adminRun(`
+        CREATE TABLE IF NOT EXISTS security_events (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          type TEXT NOT NULL,
+          username TEXT,
+          user_id INTEGER,
+          ip_address TEXT,
+          user_agent TEXT,
+          details TEXT,
+          created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+        )
+      `);
+
+      adminRun(`
+        CREATE INDEX IF NOT EXISTS idx_security_events_created_at
+        ON security_events(created_at)
+      `);
+
+      adminRun(`
+        CREATE INDEX IF NOT EXISTS idx_security_events_type
+        ON security_events(type)
+      `);
+
       adminSave();
     } catch (error) {
       console.warn("[admin] schema self-heal failed:", String(error?.message || error));
@@ -128,6 +160,7 @@ function registerAdminRoutes(app, deps) {
       usersWrite: ["admin"],
       rolesWrite: ["admin"],
       chatsWrite: ["admin", "moderator"],
+      chatAdminWrite: ["admin"],
       filesWrite: ["admin", "moderator"],
       auditRead: ["admin"],
       backupsWrite: ["admin"],
@@ -271,6 +304,280 @@ function registerAdminRoutes(app, deps) {
       })
       .sort((a, b) => String(b.name).localeCompare(String(a.name)));
   };
+
+  let lastCpuSample = null;
+  const getCpuSample = () => {
+    const cpus = os.cpus() || [];
+    const totals = cpus.reduce(
+      (acc, cpu) => {
+        const times = cpu.times || {};
+        const idle = Number(times.idle || 0);
+        const total = Object.values(times).reduce((sum, value) => sum + Number(value || 0), 0);
+        acc.idle += idle;
+        acc.total += total;
+        return acc;
+      },
+      { idle: 0, total: 0 },
+    );
+    return { ...totals, at: Date.now() };
+  };
+
+  const getCpuUsagePercent = () => {
+    const next = getCpuSample();
+    if (!lastCpuSample) {
+      lastCpuSample = next;
+      const load = Number(os.loadavg?.()[0] || 0);
+      const cores = Math.max(1, os.cpus()?.length || 1);
+      return Math.max(0, Math.min(100, (load / cores) * 100));
+    }
+    const idleDelta = Math.max(0, next.idle - lastCpuSample.idle);
+    const totalDelta = Math.max(1, next.total - lastCpuSample.total);
+    lastCpuSample = next;
+    return Math.max(0, Math.min(100, (1 - idleDelta / totalDelta) * 100));
+  };
+
+  const percent = (used, total) => {
+    const safeTotal = Number(total || 0);
+    if (!safeTotal) return 0;
+    return Math.max(0, Math.min(100, (Number(used || 0) / safeTotal) * 100));
+  };
+
+  const toStatus = (value) => {
+    const number = Number(value || 0);
+    if (number >= 90) return "critical";
+    if (number >= 75) return "warning";
+    return "healthy";
+  };
+
+  const getDirectorySize = (dirPath, maxEntries = 5000) => {
+    try {
+      if (!dirPath || !fs.existsSync(dirPath)) return 0;
+      let total = 0;
+      let scanned = 0;
+      const stack = [dirPath];
+      while (stack.length && scanned < maxEntries) {
+        const current = stack.pop();
+        const entries = fs.readdirSync(current, { withFileTypes: true });
+        entries.forEach((entry) => {
+          if (scanned >= maxEntries) return;
+          scanned += 1;
+          const entryPath = path.join(current, entry.name);
+          if (entry.isDirectory()) {
+            stack.push(entryPath);
+          } else if (entry.isFile()) {
+            total += fs.statSync(entryPath).size;
+          }
+        });
+      }
+      return total;
+    } catch {
+      return 0;
+    }
+  };
+
+  const getDiskSnapshot = () => {
+    try {
+      const stats = fs.statfsSync(projectRootDir);
+      const total = Number(stats.blocks || 0) * Number(stats.bsize || 0);
+      const free = Number(stats.bavail || stats.bfree || 0) * Number(stats.bsize || 0);
+      const used = Math.max(0, total - free);
+      const usage = percent(used, total);
+      return {
+        total,
+        used,
+        free,
+        percent: Math.round(usage),
+        totalLabel: toBytesLabel(total),
+        usedLabel: toBytesLabel(used),
+        freeLabel: toBytesLabel(free),
+        status: toStatus(usage),
+      };
+    } catch {
+      return {
+        total: 0,
+        used: 0,
+        free: 0,
+        percent: 0,
+        totalLabel: "0 B",
+        usedLabel: "0 B",
+        freeLabel: "0 B",
+        status: "unknown",
+      };
+    }
+  };
+
+  const countSince = (table, where = "", params = []) =>
+    Number(
+      adminGetRow(
+        `SELECT COUNT(*) AS count FROM ${table} WHERE datetime(created_at) >= datetime('now', '-24 hours') ${
+          where ? `AND ${where}` : ""
+        }`,
+        params,
+      )?.count || 0,
+    );
+
+  const normalizeChatMemberRole = (value) => {
+    const role = String(value || "").trim().toLowerCase();
+    return ["owner", "admin", "moderator", "member"].includes(role) ? role : "member";
+  };
+
+  const getAdminChatRow = (chatId) =>
+    adminGetRow(
+      `SELECT id, name, type, group_username, group_visibility, invite_token, group_color,
+              allow_member_invites, group_avatar_url, created_by_user_id, created_at
+       FROM chats
+       WHERE id = ? AND type IN ('group', 'channel')`,
+      [Number(chatId)],
+    );
+
+  const assertCanManageChat = (req, res) => {
+    const session = requireAdminSession(req, res, "chatAdminWrite");
+    if (!session) return null;
+    if (!requireAdminPassword(req, res, session)) return null;
+    return session;
+  };
+
+  app.get("/api/admin/system-health", (req, res) => {
+    const session = requireAdminSession(req, res, "settingsRead");
+    if (!session) return;
+
+    const memoryTotal = Number(os.totalmem?.() || 0);
+    const memoryFree = Number(os.freemem?.() || 0);
+    const memoryUsed = Math.max(0, memoryTotal - memoryFree);
+    const memoryPercent = Math.round(percent(memoryUsed, memoryTotal));
+    const cpuPercent = Math.round(getCpuUsagePercent());
+    const disk = getDiskSnapshot();
+    const databaseBytes = fs.existsSync(dbFilePath) ? fs.statSync(dbFilePath).size : 0;
+    const uploadsBytes = getDirectorySize(uploadRootDir || path.join(projectRootDir, "uploads"));
+    const latestBackup = listBackupFiles()[0] || null;
+    const versionPath = path.join(projectRootDir, "VERSION");
+    const version = fs.existsSync(versionPath)
+      ? String(fs.readFileSync(versionPath, "utf8")).trim()
+      : "";
+
+    res.json({
+      ok: true,
+      system: {
+        cpu: {
+          percent: cpuPercent,
+          cores: os.cpus()?.length || 0,
+          model: os.cpus?.()[0]?.model || "",
+          loadAverage: os.loadavg?.() || [],
+          status: toStatus(cpuPercent),
+        },
+        memory: {
+          total: memoryTotal,
+          used: memoryUsed,
+          free: memoryFree,
+          percent: memoryPercent,
+          totalLabel: toBytesLabel(memoryTotal),
+          usedLabel: toBytesLabel(memoryUsed),
+          freeLabel: toBytesLabel(memoryFree),
+          status: toStatus(memoryPercent),
+        },
+        disk,
+        runtime: {
+          uptimeSeconds: Math.round(process.uptime()),
+          systemUptimeSeconds: Math.round(os.uptime?.() || 0),
+          platform: os.platform?.() || "",
+          arch: os.arch?.() || "",
+          nodeVersion: process.version,
+          appEnv: APP_ENV || process.env.APP_ENV || "production",
+          birdxVersion: version,
+        },
+        services: {
+          database: {
+            exists: fs.existsSync(dbFilePath),
+            sizeBytes: databaseBytes,
+            sizeLabel: toBytesLabel(databaseBytes),
+          },
+          uploads: {
+            sizeBytes: uploadsBytes,
+            sizeLabel: toBytesLabel(uploadsBytes),
+          },
+          push: {
+            configured: Boolean(VAPID_PUBLIC_KEY),
+          },
+          turn: {
+            configured: Boolean(process.env.APP_TURN_URLS || process.env.TURN_URLS),
+          },
+          storageEncryption: {
+            enabled: Boolean(storageEncryption?.isEnabled?.()),
+          },
+          backups: {
+            count: listBackupFiles().length,
+            latest: latestBackup,
+          },
+        },
+      },
+    });
+  });
+
+  app.get("/api/admin/security-summary", (req, res) => {
+    const session = requireAdminSession(req, res, "auditRead");
+    if (!session) return;
+
+    const failedLogins24h = countSince("security_events", "type = ?", ["login.failed"]);
+    const bannedLogins24h = countSince("security_events", "type = ?", ["login.banned"]);
+    const failedReauth24h = countSince("admin_audit_logs", "action = ? AND COALESCE(success, 1) = 0", [
+      "admin.reauth.failed",
+    ]);
+    const sensitiveActions24h = countSince(
+      "admin_audit_logs",
+      "action IN ('user.update', 'user.reset_password', 'user.sessions.delete_all', 'user.session.delete', 'user.delete', 'chat.delete', 'file.delete', 'backup.create', 'backup.delete', 'chat.member.add', 'chat.member.role', 'chat.member.remove', 'chat.visibility.update')",
+    );
+    const activeAdminSessions = Number(
+      adminGetRow(
+        `SELECT COUNT(*) AS count
+         FROM sessions
+         JOIN users ON users.id = sessions.user_id
+         WHERE users.role IN ('owner', 'admin', 'moderator', 'support')`,
+      )?.count || 0,
+    );
+    const recentEvents = adminGetAll(
+      `SELECT id, type, username, ip_address, user_agent, details, created_at
+       FROM security_events
+       ORDER BY datetime(created_at) DESC, id DESC
+       LIMIT 12`,
+    ).map((event) => {
+      let details = {};
+      try {
+        details = event.details ? JSON.parse(event.details) : {};
+      } catch {
+        details = {};
+      }
+      return { ...event, details };
+    });
+    const recentSensitiveActions = adminGetAll(
+      `SELECT id, actor_username, action, target_type, target_id, ip_address, success, created_at
+       FROM admin_audit_logs
+       WHERE action IN ('user.update', 'user.reset_password', 'user.sessions.delete_all', 'user.session.delete', 'user.delete', 'chat.delete', 'file.delete', 'backup.create', 'backup.delete', 'chat.member.add', 'chat.member.role', 'chat.member.remove', 'chat.visibility.update', 'admin.reauth.failed')
+       ORDER BY datetime(created_at) DESC, id DESC
+       LIMIT 12`,
+    ).map((row) => ({ ...row, success: Boolean(Number(row.success || 0)) }));
+    const topIps = adminGetAll(
+      `SELECT ip_address, COUNT(*) AS count
+       FROM security_events
+       WHERE datetime(created_at) >= datetime('now', '-24 hours') AND COALESCE(ip_address, '') != ''
+       GROUP BY ip_address
+       ORDER BY count DESC
+       LIMIT 8`,
+    ).map((row) => ({ ip: row.ip_address, count: Number(row.count || 0) }));
+
+    res.json({
+      ok: true,
+      security: {
+        failedLogins24h,
+        bannedLogins24h,
+        failedReauth24h,
+        sensitiveActions24h,
+        activeAdminSessions,
+        topIps,
+        recentEvents,
+        recentSensitiveActions,
+      },
+    });
+  });
 
   app.get("/api/admin/me", (req, res) => {
     const session = requireAdminSession(req, res);
@@ -675,6 +982,7 @@ function registerAdminRoutes(app, deps) {
     const { page, pageSize, offset } = resolvePagination(req.query);
     const query = String(req.query?.query || "").trim();
     const type = String(req.query?.type || "").trim().toLowerCase();
+    const visibility = String(req.query?.visibility || "").trim().toLowerCase();
     const where = [];
     const params = [];
     if (query) {
@@ -684,6 +992,10 @@ function registerAdminRoutes(app, deps) {
     if (["dm", "group", "channel", "saved"].includes(type)) {
       where.push("chats.type = ?");
       params.push(type);
+    }
+    if (["public", "private"].includes(visibility)) {
+      where.push("chats.group_visibility = ?");
+      params.push(visibility);
     }
     const whereSql = where.length ? `WHERE ${where.join(" AND ")}` : "";
     const total = adminGetRow(
@@ -706,7 +1018,8 @@ function registerAdminRoutes(app, deps) {
           chats.id, chats.name, chats.type, chats.group_username, chats.group_visibility,
           chats.created_at, chats.created_by_user_id,
           COUNT(DISTINCT chat_members.user_id) AS member_count,
-          COUNT(DISTINCT chat_messages.id) AS message_count
+          COUNT(DISTINCT chat_messages.id) AS message_count,
+          COUNT(DISTINCT CASE WHEN chat_members.role IN ('owner', 'admin', 'moderator') THEN chat_members.user_id END) AS admin_count
         FROM chats
         LEFT JOIN chat_members ON chat_members.chat_id = chats.id
         LEFT JOIN chat_messages ON chat_messages.chat_id = chats.id
@@ -720,12 +1033,228 @@ function registerAdminRoutes(app, deps) {
       ...chat,
       member_count: Number(chat.member_count || 0),
       message_count: Number(chat.message_count || 0),
+      admin_count: Number(chat.admin_count || 0),
     }));
     res.json({
       ok: true,
       chats,
       pagination: createPaginationPayload(total, page, pageSize),
     });
+  });
+
+  app.get("/api/admin/chats/:id/detail", (req, res) => {
+    const session = requireAdminSession(req, res);
+    if (!session) return;
+
+    const chatId = toInt(req.params.id);
+    const chat = getAdminChatRow(chatId);
+    if (!chat?.id) return res.status(404).json({ error: "Group or channel not found." });
+
+    const stats = adminGetRow(
+      `SELECT
+         (SELECT COUNT(*) FROM chat_members WHERE chat_id = ?) AS members,
+         (SELECT COUNT(*) FROM chat_members WHERE chat_id = ? AND role IN ('owner', 'admin', 'moderator')) AS admins,
+         (SELECT COUNT(*) FROM chat_messages WHERE chat_id = ?) AS messages,
+         (SELECT COUNT(*) FROM chat_message_files cmf
+            JOIN chat_messages cm ON cm.id = cmf.message_id
+            WHERE cm.chat_id = ?) AS files
+       `,
+      [chatId, chatId, chatId, chatId],
+    );
+    const members = adminGetAll(
+      `SELECT users.id, users.username, users.nickname, users.avatar_url, users.color, users.status,
+              users.last_seen, users.banned, chat_members.role
+       FROM chat_members
+       JOIN users ON users.id = chat_members.user_id
+       WHERE chat_members.chat_id = ?
+       ORDER BY
+         CASE chat_members.role
+           WHEN 'owner' THEN 0
+           WHEN 'admin' THEN 1
+           WHEN 'moderator' THEN 2
+           ELSE 3
+         END,
+         users.username COLLATE NOCASE ASC`,
+      [chatId],
+    ).map((member) => ({
+      ...member,
+      avatar_url: ensureAvatarExists?.(member.id, member.avatar_url) || null,
+      banned: Boolean(Number(member.banned || 0)),
+      role: normalizeChatMemberRole(member.role),
+    }));
+
+    res.json({
+      ok: true,
+      chat: {
+        ...chat,
+        allow_member_invites: Boolean(Number(chat.allow_member_invites || 0)),
+      },
+      stats: {
+        members: Number(stats?.members || 0),
+        admins: Number(stats?.admins || 0),
+        messages: Number(stats?.messages || 0),
+        files: Number(stats?.files || 0),
+      },
+      members,
+    });
+  });
+
+  app.patch("/api/admin/chats/:id/settings", (req, res) => {
+    const session = assertCanManageChat(req, res);
+    if (!session) return;
+
+    const chatId = toInt(req.params.id);
+    const chat = getAdminChatRow(chatId);
+    if (!chat?.id) return res.status(404).json({ error: "Group or channel not found." });
+
+    const updates = [];
+    const params = [];
+    const nextVisibility = req.body?.groupVisibility !== undefined
+      ? normalizeVisibility(req.body.groupVisibility)
+      : null;
+    if (nextVisibility) {
+      updates.push("group_visibility = ?");
+      params.push(nextVisibility);
+    }
+    if (req.body?.groupUsername !== undefined) {
+      const username = normalizeGroupUsername(req.body.groupUsername);
+      if (username && !/^[a-z0-9_.]{3,32}$/.test(username)) {
+        return res.status(400).json({
+          error: "Public username must be 3-32 characters and use english letters, numbers, dot, or underscore.",
+        });
+      }
+      if (username) {
+        const existingUser = adminGetRow("SELECT id FROM users WHERE username = ?", [username]);
+        const existingChat = adminGetRow(
+          "SELECT id FROM chats WHERE group_username IN (?, ?) AND id != ?",
+          [username, `@${username}`, chatId],
+        );
+        if (existingUser?.id || existingChat?.id) {
+          return res.status(409).json({ error: "This public username is already in use." });
+        }
+      }
+      updates.push("group_username = ?");
+      params.push(username || null);
+    }
+    if (req.body?.allowMemberInvites !== undefined) {
+      updates.push("allow_member_invites = ?");
+      params.push(req.body.allowMemberInvites ? 1 : 0);
+    }
+    if (!updates.length) return res.status(400).json({ error: "No chat settings provided." });
+
+    params.push(chatId);
+    adminRun(`UPDATE chats SET ${updates.join(", ")} WHERE id = ?`, params);
+    adminSave();
+    writeAuditLog(req, session, "chat.visibility.update", "chat", chatId, {
+      before: {
+        groupVisibility: chat.group_visibility,
+        groupUsername: chat.group_username,
+        allowMemberInvites: Boolean(Number(chat.allow_member_invites || 0)),
+      },
+      after: {
+        groupVisibility: nextVisibility || chat.group_visibility,
+        groupUsername: req.body?.groupUsername,
+        allowMemberInvites: req.body?.allowMemberInvites,
+      },
+    });
+    res.json({ ok: true, detail: { chat: getAdminChatRow(chatId) } });
+  });
+
+  app.post("/api/admin/chats/:id/members", (req, res) => {
+    const session = assertCanManageChat(req, res);
+    if (!session) return;
+
+    const chatId = toInt(req.params.id);
+    const chat = getAdminChatRow(chatId);
+    if (!chat?.id) return res.status(404).json({ error: "Group or channel not found." });
+
+    const username = String(req.body?.username || "").trim().toLowerCase();
+    const role = normalizeChatMemberRole(req.body?.role || "admin");
+    if (!username) return res.status(400).json({ error: "Username is required." });
+    const user = adminGetRow("SELECT id, username FROM users WHERE username = ?", [username]);
+    if (!user?.id) return res.status(404).json({ error: "User not found." });
+
+    addChatMember?.(chatId, user.id, role);
+    clearChatMemberLeft?.(chatId, user.id);
+    clearGroupMemberRemoved?.(chatId, user.id);
+    setChatMemberRole?.(chatId, user.id, role);
+    adminSave();
+    writeAuditLog(req, session, "chat.member.add", "chat", chatId, {
+      username: user.username,
+      userId: user.id,
+      role,
+    });
+    res.json({ ok: true });
+  });
+
+  app.patch("/api/admin/chats/:id/members/:userId", (req, res) => {
+    const session = assertCanManageChat(req, res);
+    if (!session) return;
+
+    const chatId = toInt(req.params.id);
+    const userId = toInt(req.params.userId);
+    const chat = getAdminChatRow(chatId);
+    if (!chat?.id) return res.status(404).json({ error: "Group or channel not found." });
+    const member = adminGetRow(
+      `SELECT users.id, users.username, chat_members.role
+       FROM chat_members
+       JOIN users ON users.id = chat_members.user_id
+       WHERE chat_members.chat_id = ? AND chat_members.user_id = ?`,
+      [chatId, userId],
+    );
+    if (!member?.id) return res.status(404).json({ error: "Member not found." });
+    const nextRole = normalizeChatMemberRole(req.body?.role);
+    const previousRole = normalizeChatMemberRole(member.role);
+    if (
+      previousRole === "owner" &&
+      nextRole !== "owner" &&
+      Number(adminGetRow("SELECT COUNT(*) AS count FROM chat_members WHERE chat_id = ? AND role = 'owner'", [chatId])?.count || 0) <= 1
+    ) {
+      return res.status(400).json({ error: "At least one group/channel owner is required." });
+    }
+
+    setChatMemberRole?.(chatId, userId, nextRole);
+    adminSave();
+    writeAuditLog(req, session, "chat.member.role", "chat", chatId, {
+      username: member.username,
+      userId,
+      previousRole,
+      nextRole,
+    });
+    res.json({ ok: true });
+  });
+
+  app.delete("/api/admin/chats/:id/members/:userId", (req, res) => {
+    const session = assertCanManageChat(req, res);
+    if (!session) return;
+
+    const chatId = toInt(req.params.id);
+    const userId = toInt(req.params.userId);
+    const chat = getAdminChatRow(chatId);
+    if (!chat?.id) return res.status(404).json({ error: "Group or channel not found." });
+    const member = adminGetRow(
+      `SELECT users.id, users.username, chat_members.role
+       FROM chat_members
+       JOIN users ON users.id = chat_members.user_id
+       WHERE chat_members.chat_id = ? AND chat_members.user_id = ?`,
+      [chatId, userId],
+    );
+    if (!member?.id) return res.status(404).json({ error: "Member not found." });
+    if (
+      normalizeChatMemberRole(member.role) === "owner" &&
+      Number(adminGetRow("SELECT COUNT(*) AS count FROM chat_members WHERE chat_id = ? AND role = 'owner'", [chatId])?.count || 0) <= 1
+    ) {
+      return res.status(400).json({ error: "At least one group/channel owner is required." });
+    }
+
+    adminRun("DELETE FROM chat_members WHERE chat_id = ? AND user_id = ?", [chatId, userId]);
+    adminSave();
+    writeAuditLog(req, session, "chat.member.remove", "chat", chatId, {
+      username: member.username,
+      userId,
+      role: member.role,
+    });
+    res.json({ ok: true });
   });
 
   app.delete("/api/admin/chats/:id", (req, res) => {
