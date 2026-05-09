@@ -156,7 +156,8 @@ export default function ChatsListPanel({
     if (!target) return null;
     const dmChat = (visibleChats || []).find((chat) => {
       if (chat?.type !== "dm") return false;
-      return (chat.members || []).some(
+      const members = Array.isArray(chat?.members) ? chat.members : [];
+      return members.some(
         (member) => String(member?.username || "").toLowerCase() === target,
       );
     });
@@ -457,7 +458,7 @@ export default function ChatsListPanel({
         ))
       ) : !showSearchMode && sidebarChats.length ? (
         sidebarChats.map((conv, index) => {
-          const members = conv.members || [];
+          const members = Array.isArray(conv?.members) ? conv.members : [];
           const other =
             conv.type === "dm"
               ? members.find((member) => member.username !== user.username)
@@ -762,7 +763,7 @@ export default function ChatsListPanel({
                   setActiveChatId(Number(conv.id));
                   const nextOther =
                     conv.type === "dm"
-                      ? conv.members?.find(
+                      ? members.find(
                           (member) => member.username !== user.username,
                         )
                       : null;
