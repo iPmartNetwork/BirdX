@@ -1,6 +1,6 @@
 {
   "name": "birdx-server",
-  "version": "2.4.0",
+  "version": "2.4.1-rc.1",
   "private": true,
   "license": "MIT",
   "description": "BirdX Backend - API server for chat and file sharing",
