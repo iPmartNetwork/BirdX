@@ -653,6 +653,190 @@ export function setChatMemberRole(chatId, userId, role = "member") {
   ]);
 }
 
+const OPEN_CALL_STATUSES = ["ringing", "accepted", "connected", "reconnecting"];
+
+function getLatestOpenCallLogByRoom(roomId) {
+  const placeholders = OPEN_CALL_STATUSES.map(() => "?").join(", ");
+  return getRow(
+    `SELECT *
+     FROM call_logs
+     WHERE room_id = ? AND status IN (${placeholders})
+     ORDER BY id DESC
+     LIMIT 1`,
+    [String(roomId || ""), ...OPEN_CALL_STATUSES],
+  );
+}
+
+export function createCallLog({
+  chatId,
+  roomId,
+  callerUserId = null,
+  participantUserIds = [],
+  callType = "voice",
+}) {
+  const targetChatId = Number(chatId || 0);
+  const normalizedRoomId = String(roomId || "").trim();
+  const callerId = Number(callerUserId || 0) || null;
+  if (!targetChatId || !normalizedRoomId) return null;
+
+  const existing = getLatestOpenCallLogByRoom(normalizedRoomId);
+  if (existing?.id) return Number(existing.id);
+
+  run(
+    `INSERT INTO call_logs (chat_id, room_id, call_type, status, caller_user_id)
+     VALUES (?, ?, ?, 'ringing', ?)`,
+    [
+      targetChatId,
+      normalizedRoomId,
+      String(callType || "voice").toLowerCase() === "video" ? "video" : "voice",
+      callerId,
+    ],
+  );
+  const callLogId = Number(getLastInsertId() || 0);
+  if (!callLogId) return null;
+
+  const uniqueParticipantIds = Array.from(
+    new Set(
+      [callerId, ...(Array.isArray(participantUserIds) ? participantUserIds : [])]
+        .map((value) => Number(value || 0))
+        .filter((value) => Number.isFinite(value) && value > 0),
+    ),
+  );
+
+  uniqueParticipantIds.forEach((userId) => {
+    const isCaller = callerId && Number(userId) === Number(callerId);
+    run(
+      `INSERT OR IGNORE INTO call_log_participants
+        (call_log_id, user_id, role, status, joined_at)
+       VALUES (?, ?, ?, ?, ${isCaller ? "CURRENT_TIMESTAMP" : "NULL"})`,
+      [
+        callLogId,
+        userId,
+        isCaller ? "caller" : "participant",
+        isCaller ? "joined" : "invited",
+      ],
+    );
+  });
+
+  return callLogId;
+}
+
+export function markCallLogAccepted({ roomId, acceptedByUserId = null }) {
+  const callLog = getLatestOpenCallLogByRoom(roomId);
+  if (!callLog?.id) return null;
+
+  run(
+    `UPDATE call_logs
+     SET status = 'accepted',
+         accepted_at = COALESCE(accepted_at, CURRENT_TIMESTAMP)
+     WHERE id = ?`,
+    [Number(callLog.id)],
+  );
+
+  const userId = Number(acceptedByUserId || 0);
+  if (userId) {
+    run(
+      `UPDATE call_log_participants
+       SET status = 'joined',
+           joined_at = COALESCE(joined_at, CURRENT_TIMESTAMP)
+       WHERE call_log_id = ? AND user_id = ?`,
+      [Number(callLog.id), userId],
+    );
+  }
+
+  return Number(callLog.id);
+}
+
+export function finishCallLog({
+  roomId,
+  status = "ended",
+  endedByUserId = null,
+  reason = "",
+}) {
+  const callLog = getLatestOpenCallLogByRoom(roomId);
+  if (!callLog?.id) return null;
+
+  const normalizedStatus = [
+    "ended",
+    "rejected",
+    "missed",
+    "disconnect_timeout",
+    "failed",
+  ].includes(String(status || "").toLowerCase())
+    ? String(status || "").toLowerCase()
+    : "ended";
+
+  run(
+    `UPDATE call_logs
+     SET status = ?,
+         ended_at = CURRENT_TIMESTAMP,
+         duration_seconds = MAX(
+           0,
+           CAST(
+             (julianday(CURRENT_TIMESTAMP) - julianday(COALESCE(accepted_at, started_at))) * 86400
+             AS INTEGER
+           )
+         ),
+         end_reason = ?
+     WHERE id = ?`,
+    [
+      normalizedStatus,
+      String(reason || normalizedStatus).slice(0, 120),
+      Number(callLog.id),
+    ],
+  );
+
+  const userId = Number(endedByUserId || 0);
+  if (userId) {
+    run(
+      `UPDATE call_log_participants
+       SET left_at = COALESCE(left_at, CURRENT_TIMESTAMP)
+       WHERE call_log_id = ? AND user_id = ?`,
+      [Number(callLog.id), userId],
+    );
+  }
+
+  return Number(callLog.id);
+}
+
+export function listCallLogsForChat(chatId, limit = 30) {
+  const targetChatId = Number(chatId || 0);
+  if (!targetChatId) return [];
+  const safeLimit = Math.min(100, Math.max(1, Number(limit || 30)));
+  const rows = getAll(
+    `SELECT call_logs.id, call_logs.chat_id, call_logs.room_id, call_logs.call_type,
+            call_logs.status, call_logs.caller_user_id, call_logs.started_at,
+            call_logs.accepted_at, call_logs.ended_at, call_logs.duration_seconds,
+            call_logs.end_reason,
+            users.username AS caller_username,
+            users.nickname AS caller_nickname,
+            users.avatar_url AS caller_avatar_url,
+            users.color AS caller_color
+     FROM call_logs
+     LEFT JOIN users ON users.id = call_logs.caller_user_id
+     WHERE call_logs.chat_id = ?
+     ORDER BY julianday(call_logs.started_at) DESC, call_logs.id DESC
+     LIMIT ?`,
+    [targetChatId, safeLimit],
+  );
+
+  return rows.map((row) => {
+    const callLogId = Number(row.id);
+    const participants = getAll(
+      `SELECT call_log_participants.user_id, call_log_participants.role,
+              call_log_participants.status, call_log_participants.joined_at,
+              call_log_participants.left_at,
+              users.username, users.nickname, users.avatar_url, users.color
+       FROM call_log_participants
+       LEFT JOIN users ON users.id = call_log_participants.user_id
+       WHERE call_log_participants.call_log_id = ?
+       ORDER BY call_log_participants.role = 'caller' DESC, users.username ASC`,
+      [callLogId],
+    );
+    return { ...row, participants };
+  });
+}
+
 export function deleteChatById(chatId) {
   const targetChatId = Number(chatId);
   if (!targetChatId) return { storedNames: [] };
@@ -694,6 +878,12 @@ export function deleteChatById(chatId) {
     runWithoutSave("DELETE FROM chat_mutes WHERE chat_id = ?", [targetChatId]);
     runWithoutSave("DELETE FROM chat_left_members WHERE chat_id = ?", [targetChatId]);
     runWithoutSave("DELETE FROM group_removed_members WHERE chat_id = ?", [targetChatId]);
+    runWithoutSave(
+      `DELETE FROM call_log_participants
+       WHERE call_log_id IN (SELECT id FROM call_logs WHERE chat_id = ?)`,
+      [targetChatId],
+    );
+    runWithoutSave("DELETE FROM call_logs WHERE chat_id = ?", [targetChatId]);
     runWithoutSave("DELETE FROM chats WHERE id = ?", [targetChatId]);
     runWithoutSave(`RELEASE ${savepoint}`);
     saveDatabase();
