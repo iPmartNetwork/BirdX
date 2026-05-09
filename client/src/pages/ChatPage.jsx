@@ -183,6 +183,21 @@ const IN_MEMORY_MESSAGES_CACHE_MAX_CHATS = 8;
 const IN_MEMORY_MESSAGES_PER_CHAT = 480;
 const IN_MEMORY_MESSAGES_CACHE_STALE_MS = 20 * 60 * 1000;
 
+const normalizeChatSummary = (chat) => {
+  if (!chat || typeof chat !== "object") return chat;
+  const members = Array.isArray(chat.members) ? chat.members : [];
+  return {
+    ...chat,
+    id: Number(chat.id || 0),
+    last_message: normalizeMessageBody(chat.last_message),
+    members: members.map((member) => ({
+      ...member,
+      id: Number(member?.id || 0),
+      role: String(member?.role || "member").toLowerCase(),
+    })),
+  };
+};
+
 const pruneMessagesForMemory = (messages) => {
   const list = Array.isArray(messages) ? messages : [];
   if (list.length <= IN_MEMORY_MESSAGES_PER_CHAT) return list;
@@ -2246,10 +2261,7 @@ useEffect(() => {
       if (!isActive || !idbCached) return;
       if (!Array.isArray(idbCached.chats) || idbCached.chats.length === 0)
         return;
-      const normalizedCached = idbCached.chats.map((chat) => ({
-        ...chat,
-        last_message: normalizeMessageBody(chat.last_message),
-      }));
+      const normalizedCached = idbCached.chats.map(normalizeChatSummary);
       setChats((prev) => (prev.length ? prev : normalizedCached));
       setLoadingChats(false);
     })();
@@ -4527,15 +4539,9 @@ const peerStatusLabel = !activeHeaderPeer || activeHeaderPeer?.isDeleted
       if (!res.ok) {
         throw new Error(data?.error || "Failed to load chats.");
       }
-      const list = (data.chats || []).map((conv) => ({
-        ...conv,
-        id: Number(conv.id),
-        last_message: normalizeMessageBody(conv.last_message),
-        members: (Array.isArray(conv.members) ? conv.members : []).map((member) => ({
-          ...member,
-          id: Number(member.id),
-        })),
-      }));
+      const list = (Array.isArray(data.chats) ? data.chats : []).map(
+        normalizeChatSummary,
+      );
       list.sort((a, b) => {
         const aTime = a.last_time ? parseServerDate(a.last_time).getTime() : 0;
         const bTime = b.last_time ? parseServerDate(b.last_time).getTime() : 0;
