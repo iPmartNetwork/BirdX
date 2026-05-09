@@ -1,9 +1,20 @@
-import { Suspense, lazy, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import {
+  Component,
+  Suspense,
+  lazy,
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import MobileTabMenu from "../components/navigation/MobileTabMenu.jsx";
 import ChatWindowPanel from "../components/chat/ChatWindowPanel.jsx";
 import { ChatSidebar } from "../components/sidebar/index.js";
 import AppContextMenu from "../components/context-menu/AppContextMenu.jsx";
 import { useAppContextMenu } from "../components/context-menu/useAppContextMenu.js";
+import NewGroupModal from "../components/modals/NewGroupModal.jsx";
 import { CHAT_PAGE_CONFIG } from "../settings/chatPageConfig.js";
 import { getAvatarInitials } from "../utils/avatarInitials.js";
 import { NICKNAME_MAX, USERNAME_MAX } from "../utils/nameLimits.js";
@@ -122,7 +133,6 @@ const loadForwardMessageModal = () =>
 const loadLeaveGroupModal = () => import("../components/modals/LeaveGroupModal.jsx");
 const loadGroupInviteLinkModal = () => import("../components/modals/GroupInviteLinkModal.jsx");
 const loadNewChatModal = () => import("../components/modals/NewChatModal.jsx");
-const loadNewGroupModal = () => import("../components/modals/NewGroupModal.jsx");
 const loadDesktopSettingsModal = () =>
   import("../components/settings/modals/DesktopSettingsModal.jsx").then((mod) => ({
     default: mod.DesktopSettingsModal,
@@ -140,7 +150,6 @@ const ForwardMessageModal = lazy(loadForwardMessageModal);
 const LeaveGroupModal = lazy(loadLeaveGroupModal);
 const GroupInviteLinkModal = lazy(loadGroupInviteLinkModal);
 const NewChatModal = lazy(loadNewChatModal);
-const NewGroupModal = lazy(loadNewGroupModal);
 const DesktopSettingsModal = lazy(loadDesktopSettingsModal);
 const NotificationsSettingsModal = lazy(loadNotificationsSettingsModal);
 const WhatsNewModal = lazy(loadWhatsNewModal);
@@ -162,7 +171,6 @@ const preloadChatPageLazyChunks = () =>
     loadLeaveGroupModal(),
     loadGroupInviteLinkModal(),
     loadNewChatModal(),
-    loadNewGroupModal(),
     loadDesktopSettingsModal(),
     loadNotificationsSettingsModal(),
     loadWhatsNewModal(),
@@ -178,6 +186,50 @@ const resolveChunkPreloadMode = () => {
   if (effectiveType === "slow-2g" || effectiveType === "2g") return "idle";
   return "eager";
 };
+
+class ModalErrorBoundary extends Component {
+  constructor(props) {
+    super(props);
+    this.state = { error: null };
+  }
+
+  static getDerivedStateFromError(error) {
+    return { error };
+  }
+
+  componentDidCatch(error) {
+    console.error("Modal render failed:", error);
+  }
+
+  componentDidUpdate(prevProps) {
+    if (prevProps.resetKey !== this.props.resetKey && this.state.error) {
+      this.setState({ error: null });
+    }
+  }
+
+  render() {
+    if (!this.state.error) return this.props.children;
+    return (
+      <div className="fixed inset-0 z-[180] flex items-center justify-center bg-black/45 px-5">
+        <div className="w-full max-w-sm rounded-2xl border border-rose-200 bg-white p-5 text-center shadow-xl dark:border-rose-500/30 dark:bg-slate-950">
+          <p className="text-sm font-semibold text-rose-600 dark:text-rose-200">
+            {this.props.title || "Unable to open editor"}
+          </p>
+          <p className="mt-2 text-xs text-slate-500 dark:text-slate-400">
+            Please close this panel and try again.
+          </p>
+          <button
+            type="button"
+            onClick={this.props.onClose}
+            className="mt-4 rounded-full border border-rose-200 bg-rose-50 px-4 py-2 text-xs font-semibold text-rose-600 transition hover:border-rose-300 hover:bg-rose-100 dark:border-rose-500/30 dark:bg-rose-900/30 dark:text-rose-200"
+          >
+            Close
+          </button>
+        </div>
+      </div>
+    );
+  }
+}
 
 const IN_MEMORY_MESSAGES_CACHE_MAX_CHATS = 8;
 const IN_MEMORY_MESSAGES_PER_CHAT = 480;
@@ -6793,7 +6845,11 @@ const peerStatusLabel = !activeHeaderPeer || activeHeaderPeer?.isDeleted
       ) : null}
 
       {newGroupOpen ? (
-        <Suspense fallback={null}>
+        <ModalErrorBoundary
+          resetKey={`${newGroupOpen ? "open" : "closed"}:${activeChat?.id || "new"}:${groupModalType}`}
+          title={`Unable to open ${groupModalType === "channel" ? "channel" : "group"} editor`}
+          onClose={closeNewGroupModal}
+        >
           <NewGroupModal
             open={newGroupOpen}
             groupForm={newGroupForm}
@@ -6834,7 +6890,7 @@ const peerStatusLabel = !activeHeaderPeer || activeHeaderPeer?.isDeleted
             entityLabel={groupModalType === "channel" ? "Channel" : "Group"}
             onDeleteChat={editingGroup ? handleDeleteActiveGroup : null}
           />
-        </Suspense>
+        </ModalErrorBoundary>
       ) : null}
 
       {groupInviteOpen ? (
