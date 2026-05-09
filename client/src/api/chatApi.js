@@ -300,6 +300,13 @@ export const removeGroupMember = (chatId, payload) =>
     body: JSON.stringify(payload),
   });
 
+export const updateGroupMemberRole = (chatId, payload) =>
+  apiFetch(`${API_BASE}/api/chats/group/${encodeURIComponent(chatId)}/member-role`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+
 export const updateGroupChat = (chatId, payload) =>
   apiFetch(`${API_BASE}/api/chats/group/${encodeURIComponent(chatId)}`, {
     method: "PUT",
