@@ -25,6 +25,7 @@ import * as migration024MessageReactions from "./024-message-reactions.js";
 import { migration025AdminPanel } from "./025-admin-panel.js";
 import { migration026AdminSecurity } from "./026-admin-security.js";
 import { migration027SecurityEvents } from "./027-security-events.js";
+import { migration028CallLogs } from "./028-call-logs.js";
 
 export const migrations = [
   migration001InitialSchema,
@@ -54,4 +55,5 @@ export const migrations = [
   migration025AdminPanel,
   migration026AdminSecurity,
   migration027SecurityEvents,
+  migration028CallLogs,
 ];
