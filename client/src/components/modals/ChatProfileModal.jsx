@@ -1,457 +1,439 @@
-import { useMemo, useRef, useState } from "react";
-import { createPortal } from "react-dom";
-import ContextMenuSurface from "../context-menu/ContextMenuSurface.jsx";
-import {
-  ArrowDown,
-  Bookmark,
-  Chat,
-  Close,
-  Copy,
-  LogIn,
-  LogOut,
-  Pencil,
-  Volume2,
-  VolumeX,
-} from "../../icons/lucide.js";
-import { copyTextToClipboard } from "../../utils/clipboard.js";
-import { getAvatarInitials } from "../../utils/avatarInitials.js";
-import { hasPersian } from "../../utils/fontUtils.js";
-import Avatar from "../common/Avatar.jsx";
+const API_BASE = "";
 
-const MEMBERS_BATCH_SIZE = 10;
+const withCredentials = (options = {}) => ({
+  credentials: "include",
+  ...options,
+});
 
-export default function ChatProfileModal({
-  open,
-  chat,
-  targetUser,
-  currentUser,
-  muted,
-  inviteLink,
-  canViewInvite,
-  onClose,
-  onOpenChat,
-  onToggleMute,
-  onLeaveGroup,
-  onOpenMember,
-  onRemoveMember,
-  onOpenUserContextMenu,
-  onEditGroup,
-  onEditSelfProfile,
-  showJoinAction = false,
-  onJoinChat,
-  showMembers = true,
-  readOnly = false,
-  membersBatchSize = MEMBERS_BATCH_SIZE,
-}) {
-  const [memberQuery, setMemberQuery] = useState("");
-  const [memberLimit, setMemberLimit] = useState(membersBatchSize);
-  const [copiedInviteLink, setCopiedInviteLink] = useState(false);
-  const membersListRef = useRef(null);
-  const handleClose = () => {
-    setMemberQuery("");
-    setMemberLimit(membersBatchSize);
-    setCopiedInviteLink(false);
-    onClose?.();
-  };
+export const apiFetch = (url, options = {}) => fetch(url, withCredentials(options));
 
-  const isGroup = chat?.type === "group";
-  const isChannel = chat?.type === "channel";
-  const isSaved = chat?.type === "saved";
-  const isSelfProfile =
-    !isGroup &&
-    !isChannel &&
-    !isSaved &&
-    String(targetUser?.username || "").toLowerCase() ===
-      String(currentUser?.username || "").toLowerCase();
-  const profileName =
-    isGroup || isChannel
-      ? chat?.name || (isChannel ? "Channel" : "Group")
-      : isSaved
-        ? "Saved messages"
-        : targetUser?.nickname || targetUser?.username || "User";
-  const profileUsername =
-    isGroup || isChannel
-      ? chat?.group_username || ""
-      : isSaved
-        ? ""
-        : targetUser?.username || "";
-  const profileAvatarUrl =
-    isGroup || isChannel
-      ? chat?.group_avatar_url || null
-      : isSaved
-        ? null
-        : targetUser?.avatar_url || null;
-  const profileColor =
-    isGroup || isChannel
-      ? chat?.group_color || "#10b981"
-      : isSaved
-        ? "#10b981"
-        : targetUser?.color || "#10b981";
-  const initials = getAvatarInitials(profileName);
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  const members = Array.isArray(chat?.members) ? chat.members : [];
-  const membersCountRaw = Number(chat?.membersCount);
-  const membersCount = Number.isFinite(membersCountRaw)
-    ? membersCountRaw
-    : members.length;
-  const ownerId = Number(
-    members.find(
-      (member) => String(member.role || "").toLowerCase() === "owner",
-    )?.id || 0,
+export const fetchHealth = () => apiFetch(`${API_BASE}/api/health`);
+
+export const pingPresence = (username) =>
+  apiFetch(`${API_BASE}/api/presence`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ username }),
+  });
+
+export const fetchPresence = (username) =>
+  apiFetch(`${API_BASE}/api/presence?username=${encodeURIComponent(username)}`);
+
+export const searchUsers = ({ exclude, query }) =>
+  apiFetch(
+    `${API_BASE}/api/users?exclude=${encodeURIComponent(exclude)}&query=${encodeURIComponent(
+      query,
+    )}`,
   );
-  const isOwner = Number(currentUser?.id || 0) === ownerId;
-  const isReadOnly = Boolean(readOnly);
-  const canSeeMembers =
-    showMembers && !isReadOnly && (isGroup || (isChannel && isOwner));
-  const memberQueryHasPersian = hasPersian(memberQuery || "");
 
-  const sortedMembers = useMemo(() => {
-    const query = memberQuery.trim().toLowerCase();
-    const normalized = members.filter((member) => {
-      if (!query) return true;
-      const nickname = String(member?.nickname || "").toLowerCase();
-      const username = String(member?.username || "").toLowerCase();
-      return nickname.includes(query) || username.includes(query);
-    });
-    const owners = normalized
-      .filter((member) => String(member.role || "").toLowerCase() === "owner")
-      .sort((a, b) =>
-        String(a.username || "").localeCompare(String(b.username || "")),
-      );
-    const online = normalized
-      .filter(
-        (member) =>
-          String(member.role || "").toLowerCase() !== "owner" &&
-          String(member.status || "").toLowerCase() === "online",
-      )
-      .sort((a, b) =>
-        String(a.username || "").localeCompare(String(b.username || "")),
-      );
-    const offline = normalized
-      .filter(
-        (member) =>
-          String(member.role || "").toLowerCase() !== "owner" &&
-          String(member.status || "").toLowerCase() !== "online",
-      )
-      .sort((a, b) =>
-        String(a.username || "").localeCompare(String(b.username || "")),
-      );
-    return [...owners, ...online, ...offline];
-  }, [memberQuery, members]);
+export const resolveMentions = ({ username, mentions }) =>
+  apiFetch(`${API_BASE}/api/mentions/resolve`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ username, mentions }),
+  });
 
-  const visibleMembers = sortedMembers.slice(0, memberLimit);
-  const hasMoreMembers = sortedMembers.length > memberLimit;
-  if (!open) return null;
-  if (typeof document === "undefined") return null;
+export const fetchPushPublicKey = () => apiFetch(`${API_BASE}/api/push/public-key`);
 
-  return createPortal(
-    <div className="fixed inset-0 z-[140] flex items-center justify-center bg-black/45 px-5">
-      <div className="app-scroll max-h-[calc(100dvh-2rem)] w-full max-w-lg overflow-y-auto rounded-3xl border border-emerald-100/70 bg-white p-5 shadow-xl dark:border-emerald-500/30 dark:bg-slate-950">
-        <div className="mb-3 flex items-center justify-between">
-          {!isReadOnly && (isGroup || isChannel) && isOwner ? (
-            <button
-              type="button"
-              onClick={onEditGroup}
-              className="inline-flex h-9 w-9 items-center justify-center rounded-full border border-emerald-200 bg-white text-emerald-700 transition hover:border-emerald-300 hover:bg-emerald-50 dark:border-emerald-500/30 dark:bg-slate-900 dark:text-emerald-200 dark:hover:bg-emerald-500/10"
-              aria-label={isChannel ? "Edit channel" : "Edit group"}
-            >
-              <Pencil size={16} className="icon-anim-sway" />
-            </button>
-          ) : !isReadOnly && isSelfProfile ? (
-            <button
-              type="button"
-              onClick={onEditSelfProfile}
-              className="inline-flex h-9 w-9 items-center justify-center rounded-full border border-emerald-200 bg-white text-emerald-700 transition hover:border-emerald-300 hover:bg-emerald-50 dark:border-emerald-500/30 dark:bg-slate-900 dark:text-emerald-200 dark:hover:bg-emerald-500/10"
-              aria-label="Edit profile"
-            >
-              <Pencil size={16} className="icon-anim-sway" />
-            </button>
-          ) : (
-            <span />
-          )}
-          <button
-            type="button"
-            onClick={handleClose}
-            className="inline-flex h-9 w-9 items-center justify-center rounded-full border border-rose-200 bg-white text-rose-600 transition hover:border-rose-300 hover:bg-rose-50 dark:border-rose-500/30 dark:bg-slate-900 dark:text-rose-200 dark:hover:bg-rose-500/10"
-            aria-label="Close profile"
-          >
-            <Close size={16} className="icon-anim-pop" />
-          </button>
-        </div>
+export const subscribePush = ({ username, subscription }) =>
+  apiFetch(`${API_BASE}/api/push/subscribe`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ username, subscription }),
+  });
 
-        <div className="text-center">
-          <Avatar
-            src={profileAvatarUrl}
-            alt={profileName}
-            name={profileName}
-            color={profileColor}
-            initials={initials}
-            placeholderContent={
-              isSaved ? <Bookmark size={24} className="text-white" /> : initials
-            }
-            className="mx-auto h-20 w-20 text-2xl font-bold"
-          />
-          <p
-            className={`mt-3 text-lg font-semibold ${hasPersian(profileName) ? "font-fa" : ""}`}
-            dir="auto"
-            style={{ unicodeBidi: "plaintext" }}
-          >
-            {profileName}
-          </p>
-          {profileUsername ? (
-            <p
-              className="max-w-full truncate text-sm text-slate-500 dark:text-slate-400"
-              dir="auto"
-              title={profileUsername}
-            >
-              @{profileUsername}
-            </p>
-          ) : null}
-          {isGroup || isChannel ? (
-            <p
-              className={`mt-1 whitespace-nowrap text-slate-500 dark:text-slate-400 ${
-                membersCount >= 1_000_000 ? "text-[10px] sm:text-xs" : "text-xs"
-              }`}
-            >
-              {membersCount.toLocaleString("en-US")} members
-            </p>
-          ) : null}
-        </div>
+export const unsubscribePush = ({ username, endpoint }) =>
+  apiFetch(`${API_BASE}/api/push/unsubscribe`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ username, endpoint }),
+  });
 
-        {showJoinAction ? (
-          <div className="mt-4 grid grid-cols-3 gap-2">
-            <button
-              type="button"
-              onClick={onJoinChat}
-              className="group col-start-2 rounded-2xl border border-emerald-200 bg-white px-2 py-3 text-emerald-700 transition hover:border-emerald-300 hover:bg-emerald-50 dark:border-emerald-500/30 dark:bg-slate-900 dark:text-emerald-200 dark:hover:bg-emerald-500/10"
-            >
-              <div className="mx-auto inline-flex h-11 w-11 items-center justify-center rounded-full">
-                <LogIn size={24} className="icon-anim-bob" />
-              </div>
-              <p className="mt-1 text-xs font-semibold">Join</p>
-            </button>
-          </div>
-        ) : !isReadOnly && !isSelfProfile && !isSaved ? (
-          <div
-            className={`mt-4 ${
-              isGroup || isChannel
-                ? "grid grid-cols-3 gap-2"
-                : "mx-auto grid w-full max-w-[18rem] grid-cols-2 gap-2"
-            }`}
-          >
-            <button
-              type="button"
-              onClick={onOpenChat}
-              className="group rounded-2xl border border-emerald-200 bg-white px-2 py-3 text-emerald-700 transition hover:border-emerald-300 hover:bg-emerald-50 dark:border-emerald-500/30 dark:bg-slate-900 dark:text-emerald-200 dark:hover:bg-emerald-500/10"
-            >
-              <div className="mx-auto inline-flex h-11 w-11 items-center justify-center rounded-full">
-                <Chat size={24} className="icon-anim-bob" />
-              </div>
-              <p className="mt-1 text-xs font-semibold">Chat</p>
-            </button>
-            <button
-              type="button"
-              onClick={onToggleMute}
-              className="group rounded-2xl border border-emerald-200 bg-white px-2 py-3 text-emerald-700 transition hover:border-emerald-300 hover:bg-emerald-50 dark:border-emerald-500/30 dark:bg-slate-900 dark:text-emerald-200 dark:hover:bg-emerald-500/10"
-            >
-              <div className="mx-auto inline-flex h-11 w-11 items-center justify-center rounded-full">
-                {muted ? (
-                  <Volume2 size={24} className="icon-anim-sway" />
-                ) : (
-                  <VolumeX size={24} className="icon-anim-sway" />
-                )}
-              </div>
-              <p className="mt-1 text-xs font-semibold">
-                {muted ? "Unmute" : "Mute"}
-              </p>
-            </button>
-            {isGroup || isChannel ? (
-              <button
-                type="button"
-                onClick={onLeaveGroup}
-                className="group rounded-2xl border border-rose-200 bg-rose-50 px-2 py-3 text-rose-600 transition hover:border-rose-300 hover:bg-rose-100 dark:border-rose-500/30 dark:bg-rose-900/30 dark:text-rose-200 dark:hover:bg-rose-900/45"
-              >
-                <div className="mx-auto inline-flex h-11 w-11 items-center justify-center rounded-full">
-                  <LogOut size={24} className="icon-anim-slide" />
-                </div>
-                <p className="mt-1 text-xs font-semibold">Leave</p>
-              </button>
-            ) : null}
-          </div>
-        ) : null}
+export const sendPushTest = ({ username }) =>
+  apiFetch(`${API_BASE}/api/push/test`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ username }),
+  });
 
-        {!isReadOnly && (isGroup || isChannel) && canViewInvite ? (
-          <div className="mt-4 rounded-2xl border border-emerald-200 bg-emerald-50/70 p-3 dark:border-emerald-500/30 dark:bg-emerald-500/10">
-            <div className="flex items-center justify-between gap-2">
-              <p className="text-xs font-semibold text-emerald-700 dark:text-emerald-200">
-                Invite link
-              </p>
-              <button
-                type="button"
-                onClick={async () => {
-                  const value = String(inviteLink || "");
-                  if (!value) return;
-                  try {
-                    await copyTextToClipboard(value);
-                    setCopiedInviteLink(true);
-                    window.setTimeout(() => setCopiedInviteLink(false), 1400);
-                  } catch {
-                    // ignore clipboard errors
-                  }
-                }}
-                className="inline-flex items-center gap-1 rounded-full border border-emerald-200 bg-white px-2.5 py-1 text-[11px] font-semibold text-emerald-700 transition hover:border-emerald-300 hover:bg-emerald-50 hover:shadow-[0_0_14px_rgba(16,185,129,0.2)] dark:border-emerald-500/30 dark:bg-slate-900 dark:text-emerald-200 dark:hover:bg-emerald-500/10"
-              >
-                <Copy size={12} className="icon-anim-pop" />
-                {copiedInviteLink ? "Copied" : "Copy"}
-              </button>
-            </div>
-            <p className="mt-1 break-all text-xs text-slate-600 dark:text-slate-300">
-              {inviteLink}
-            </p>
-          </div>
-        ) : null}
+export const fetchAdminMe = () => apiFetch(`${API_BASE}/api/admin/me`);
 
-        {canSeeMembers ? (
-          <div className="mt-4 rounded-2xl border border-emerald-200/80 p-3 dark:border-emerald-500/30">
-            <div className="relative">
-              <input
-                value={memberQuery}
-                onChange={(event) => {
-                  setMemberQuery(event.target.value);
-                  setMemberLimit(membersBatchSize);
-                }}
-                placeholder="Search members"
-                lang={memberQueryHasPersian ? "fa" : "en"}
-                dir={memberQueryHasPersian ? "rtl" : "ltr"}
-                className={`w-full rounded-2xl border border-emerald-200 bg-white px-4 py-2.5 pr-14 text-sm text-slate-700 outline-none transition focus:border-emerald-400 focus:ring-2 focus:ring-emerald-300/60 dark:border-emerald-500/30 dark:bg-slate-900 dark:text-slate-100 ${
-                  memberQueryHasPersian ? "font-fa text-right" : "text-left"
-                }`}
-                style={{ unicodeBidi: "plaintext" }}
-              />
-              {memberQuery.trim() ? (
-                <button
-                  type="button"
-                  onClick={() => setMemberQuery("")}
-                  className="absolute right-1 top-1/2 inline-flex h-8 w-8 -translate-y-1/2 items-center justify-center rounded-full border border-transparent bg-transparent text-rose-600 transition hover:bg-rose-100 hover:shadow-[0_0_18px_rgba(244,63,94,0.22)] dark:text-rose-200 dark:hover:bg-rose-500/10"
-                >
-                  <Close size={14} className="icon-anim-pop" />
-                </button>
-              ) : null}
-            </div>
+export const fetchAdminOverview = () => apiFetch(`${API_BASE}/api/admin/overview`);
 
-            <div
-              className="app-scroll mt-3 max-h-72 space-y-2 overflow-y-auto pr-1"
-              ref={membersListRef}
-            >
-              {visibleMembers.map((member) => {
-                const label = member.nickname || member.username;
-                const memberInitials = getAvatarInitials(label);
-                const memberIsOwner =
-                  String(member.role || "").toLowerCase() === "owner";
-                return (
-                  <ContextMenuSurface
-                    as="div"
-                    key={`member-row-${member.id}`}
-                    className="flex items-center gap-2 rounded-xl border border-emerald-100/80 bg-white/80 px-2 py-2 transition hover:border-emerald-300 hover:shadow-[0_0_20px_rgba(16,185,129,0.18)] dark:border-emerald-500/20 dark:bg-slate-900/70 dark:hover:border-emerald-500/35 dark:hover:shadow-[0_0_18px_rgba(16,185,129,0.12)]"
-                    contextMenu={{
-                      isMobile:
-                        typeof window !== "undefined" &&
-                        window.matchMedia("(max-width: 767px) and (pointer: coarse)")
-                          .matches,
-                      onOpen: ({ event, targetEl, isMobile }) =>
-                        onOpenUserContextMenu?.({
-                          kind: "user",
-                          event,
-                          targetEl,
-                          isMobile,
-                          data: {
-                            member,
-                            sourceChatType: chat?.type || "",
-                            onOpenProfile: onOpenMember,
-                          },
-                        }),
-                    }}
-                  >
-                    <button
-                      type="button"
-                      onClick={() => onOpenMember?.(member)}
-                      className="flex min-w-0 flex-1 items-center gap-2 text-left"
-                    >
-                      <Avatar
-                        src={member.avatar_url}
-                        alt={label}
-                        name={label}
-                        color={member.color || "#10b981"}
-                        initials={memberInitials}
-                        className="h-8 w-8 text-xs"
-                      />
-                      <div className="min-w-0">
-                        <p
-                          className={`truncate text-sm font-semibold ${hasPersian(label) ? "font-fa" : ""}`}
-                          dir="auto"
-                          title={label}
-                        >
-                          {label}
-                        </p>
-                        <p className="inline-flex items-center gap-1 truncate text-xs text-slate-500 dark:text-slate-400">
-                          <span
-                            className={`h-1.5 w-1.5 rounded-full ${
-                              String(member.status || "").toLowerCase() ===
-                              "online"
-                                ? "bg-emerald-400"
-                                : "bg-slate-400"
-                            }`}
-                          />
-                          {String(member.status || "").toLowerCase() ===
-                          "online"
-                            ? "online"
-                            : "offline"}
-                        </p>
-                      </div>
-                    </button>
-                    {memberIsOwner ? (
-                      <span className="rounded-full border border-emerald-200 bg-emerald-50 px-2 py-0.5 text-[10px] font-semibold text-emerald-700 dark:border-emerald-500/30 dark:bg-emerald-500/10 dark:text-emerald-200">
-                        Owner
-                      </span>
-                    ) : null}
-                    {isOwner && !memberIsOwner ? (
-                      <button
-                        type="button"
-                        onClick={() => onRemoveMember?.(member)}
-                        className="rounded-full border border-rose-200 bg-rose-50 px-2 py-1 text-[10px] font-semibold text-rose-600 transition hover:border-rose-300 hover:bg-rose-100 hover:shadow-[0_0_14px_rgba(229,62,95,0.2)] dark:border-rose-500/30 dark:bg-rose-900/30 dark:text-rose-200 dark:hover:bg-rose-500/10"
-                      >
-                        Remove
-                      </button>
-                    ) : null}
-                  </ContextMenuSurface>
-                );
-              })}
-            </div>
+export const fetchAdminSystemHealth = () => apiFetch(`${API_BASE}/api/admin/system-health`);
 
-            {hasMoreMembers ? (
-              <button
-                type="button"
-                onClick={() => {
-                  setMemberLimit((prev) => prev + membersBatchSize);
-                  setTimeout(() => {
-                    if (membersListRef.current) {
-                      membersListRef.current.scrollTo({
-                        top: membersListRef.current.scrollHeight,
-                        behavior: "smooth",
-                      });
-                    }
-                  }, 0);
-                }}
-                className="mt-2 inline-flex w-full items-center justify-center gap-1 rounded-xl border border-emerald-200 bg-white px-3 py-2 text-xs font-semibold text-emerald-700 transition hover:border-emerald-300 hover:bg-emerald-50 hover:shadow-[0_0_14px_rgba(16,185,129,0.2)] dark:border-emerald-500/30 dark:bg-slate-900 dark:text-emerald-200 dark:hover:bg-emerald-500/10"
-              >
-                <ArrowDown size={12} className="icon-anim-pop" />
-                Show more
-              </button>
-            ) : null}
-          </div>
-        ) : null}
-      </div>
-    </div>,
-    document.body,
+export const fetchAdminSecuritySummary = () => apiFetch(`${API_BASE}/api/admin/security-summary`);
+
+const buildAdminQuery = (params = {}) => {
+  const search = new URLSearchParams();
+  Object.entries(params || {}).forEach(([key, value]) => {
+    if (value === undefined || value === null || value === "") return;
+    search.set(key, String(value));
+  });
+  const query = search.toString();
+  return query ? `?${query}` : "";
+};
+
+export const fetchAdminUsers = (params = {}) =>
+  apiFetch(`${API_BASE}/api/admin/users${buildAdminQuery(params)}`);
+
+export const fetchAdminUserDetail = (userId) =>
+  apiFetch(`${API_BASE}/api/admin/users/${encodeURIComponent(userId)}`);
+
+const adminJsonOptions = (method, payload = {}) => ({
+  method,
+  headers: { "Content-Type": "application/json" },
+  body: JSON.stringify(payload || {}),
+});
+
+export const updateAdminUser = (userId, payload) =>
+  apiFetch(`${API_BASE}/api/admin/users/${encodeURIComponent(userId)}`, adminJsonOptions("PATCH", payload));
+
+export const resetAdminUserPassword = (userId, payload) => {
+  const body = typeof payload === "string" ? { password: payload } : payload;
+  return apiFetch(
+    `${API_BASE}/api/admin/users/${encodeURIComponent(userId)}/reset-password`,
+    adminJsonOptions("POST", body),
   );
-}
+};
+
+export const deleteAdminUser = (userId, payload = {}) =>
+  apiFetch(`${API_BASE}/api/admin/users/${encodeURIComponent(userId)}`, adminJsonOptions("DELETE", payload));
+
+export const deleteAdminUserSession = (userId, sessionId, payload = {}) =>
+  apiFetch(
+    `${API_BASE}/api/admin/users/${encodeURIComponent(userId)}/sessions/${encodeURIComponent(
+      sessionId,
+    )}`,
+    adminJsonOptions("DELETE", payload),
+  );
+
+export const deleteAdminUserSessions = (userId, payload = {}) =>
+  apiFetch(`${API_BASE}/api/admin/users/${encodeURIComponent(userId)}/sessions`, adminJsonOptions("DELETE", payload));
+
+export const fetchAdminChats = (params = {}) =>
+  apiFetch(`${API_BASE}/api/admin/chats${buildAdminQuery(params)}`);
+
+export const fetchAdminChatDetail = (chatId) =>
+  apiFetch(`${API_BASE}/api/admin/chats/${encodeURIComponent(chatId)}/detail`);
+
+export const updateAdminChatSettings = (chatId, payload = {}) =>
+  apiFetch(
+    `${API_BASE}/api/admin/chats/${encodeURIComponent(chatId)}/settings`,
+    adminJsonOptions("PATCH", payload),
+  );
+
+export const addAdminChatMember = (chatId, payload = {}) =>
+  apiFetch(
+    `${API_BASE}/api/admin/chats/${encodeURIComponent(chatId)}/members`,
+    adminJsonOptions("POST", payload),
+  );
+
+export const updateAdminChatMember = (chatId, userId, payload = {}) =>
+  apiFetch(
+    `${API_BASE}/api/admin/chats/${encodeURIComponent(chatId)}/members/${encodeURIComponent(userId)}`,
+    adminJsonOptions("PATCH", payload),
+  );
+
+export const deleteAdminChatMember = (chatId, userId, payload = {}) =>
+  apiFetch(
+    `${API_BASE}/api/admin/chats/${encodeURIComponent(chatId)}/members/${encodeURIComponent(userId)}`,
+    adminJsonOptions("DELETE", payload),
+  );
+
+export const deleteAdminChat = (chatId, payload = {}) =>
+  apiFetch(`${API_BASE}/api/admin/chats/${encodeURIComponent(chatId)}`, adminJsonOptions("DELETE", payload));
+
+export const fetchAdminFiles = (params = {}) =>
+  apiFetch(`${API_BASE}/api/admin/files${buildAdminQuery(params)}`);
+
+export const deleteAdminFile = (fileId, payload = {}) =>
+  apiFetch(`${API_BASE}/api/admin/files/${encodeURIComponent(fileId)}`, adminJsonOptions("DELETE", payload));
+
+export const fetchAdminAuditLogs = (params = {}) =>
+  apiFetch(`${API_BASE}/api/admin/audit-logs${buildAdminQuery(params)}`);
+
+export const fetchAdminSettings = () => apiFetch(`${API_BASE}/api/admin/settings`);
+
+export const fetchAdminBackups = () => apiFetch(`${API_BASE}/api/admin/backups`);
+
+export const createAdminBackup = (payload = {}) =>
+  apiFetch(`${API_BASE}/api/admin/backups`, adminJsonOptions("POST", payload));
+
+export const deleteAdminBackup = (name, payload = {}) =>
+  apiFetch(`${API_BASE}/api/admin/backups/${encodeURIComponent(name)}`, adminJsonOptions("DELETE", payload));
+
+export const getAdminBackupDownloadUrl = (name) =>
+  `${API_BASE}/api/admin/backups/${encodeURIComponent(name)}/download`;
+
+export const discoverUsersAndGroups = ({ username, query }) =>
+  apiFetch(
+    `${API_BASE}/api/discover?username=${encodeURIComponent(
+      username,
+    )}&query=${encodeURIComponent(query)}`,
+  );
+
+export const markMessagesRead = ({ chatId, username }) =>
+  apiFetch(`${API_BASE}/api/messages/read`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ chatId, username }),
+  });
+
+export const getMessageReadCounts = ({ chatId, username, messageIds }) =>
+  apiFetch(`${API_BASE}/api/messages/read-counts`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ chatId, username, messageIds }),
+  });
+
+export const logout = () =>
+  apiFetch(`${API_BASE}/api/logout`, {
+    method: "POST",
+  });
+
+export const updateProfile = (payload) =>
+  apiFetch(`${API_BASE}/api/profile`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+
+export const uploadAvatar = (payload) =>
+  apiFetch(`${API_BASE}/api/profile/avatar`, {
+    method: "POST",
+    body: payload,
+  });
+
+export const updateStatus = (payload) =>
+  apiFetch(`${API_BASE}/api/status`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+
+export const updatePassword = (payload) =>
+  apiFetch(`${API_BASE}/api/password`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+
+export const deleteAccount = (payload) =>
+  apiFetch(`${API_BASE}/api/profile/delete`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+
+export const listChats = () => apiFetch(`${API_BASE}/api/chats`);
+
+export const listChatsForUser = (username, options = {}) =>
+  apiFetch(`${API_BASE}/api/chats?username=${encodeURIComponent(username)}`, options);
+
+export const createChat = (payload) =>
+  apiFetch(`${API_BASE}/api/chats`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+
+export const deleteChats = (payload) =>
+  apiFetch(`${API_BASE}/api/chats/delete`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+
+export const createDmChat = ({ from, to }) =>
+  apiFetch(`${API_BASE}/api/chats/dm`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ from, to }),
+  });
+
+export const createGroupChat = (payload) =>
+  apiFetch(`${API_BASE}/api/chats/group`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+
+export const createChannelChat = (payload) =>
+  apiFetch(`${API_BASE}/api/chats/group`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ ...payload, type: "channel" }),
+  });
+
+export const getGroupInviteInfo = (token) =>
+  apiFetch(`${API_BASE}/api/groups/invite/${encodeURIComponent(token)}`);
+
+export const joinGroupByInvite = (token, payload = {}) =>
+  apiFetch(`${API_BASE}/api/groups/invite/${encodeURIComponent(token)}/join`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+
+export const getGroupInviteLink = (chatId) =>
+  apiFetch(`${API_BASE}/api/chats/group/${encodeURIComponent(chatId)}/invite-link`);
+
+export const regenerateGroupInviteLink = (chatId, payload) =>
+  apiFetch(`${API_BASE}/api/chats/group/${encodeURIComponent(chatId)}/regenerate-invite`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+
+export const leaveGroupChat = (chatId, payload) =>
+  apiFetch(`${API_BASE}/api/chats/group/${encodeURIComponent(chatId)}/leave`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+
+export const removeGroupMember = (chatId, payload) =>
+  apiFetch(`${API_BASE}/api/chats/group/${encodeURIComponent(chatId)}/remove-member`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+
+export const updateGroupMemberRole = (chatId, payload) =>
+  apiFetch(`${API_BASE}/api/chats/group/${encodeURIComponent(chatId)}/member-role`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+
+export const updateGroupChat = (chatId, payload) =>
+  apiFetch(`${API_BASE}/api/chats/group/${encodeURIComponent(chatId)}`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+
+export const updateChannelChat = (chatId, payload) =>
+  apiFetch(`${API_BASE}/api/chats/group/${encodeURIComponent(chatId)}`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ ...payload, type: "channel" }),
+  });
+
+export const deleteGroupChat = (chatId, payload) =>
+  apiFetch(`${API_BASE}/api/chats/group/${encodeURIComponent(chatId)}/delete`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+
+export const joinPublicGroup = (chatId, payload) =>
+  apiFetch(`${API_BASE}/api/chats/group/${encodeURIComponent(chatId)}/join-public`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+
+export const getChatPreview = ({ chatId, username }) =>
+  apiFetch(
+    `${API_BASE}/api/chats/${encodeURIComponent(chatId)}/preview?username=${encodeURIComponent(
+      username,
+    )}`,
+  );
+
+export const uploadGroupAvatar = (chatId, payload) =>
+  apiFetch(`${API_BASE}/api/chats/group/${encodeURIComponent(chatId)}/avatar`, {
+    method: "POST",
+    body: payload,
+  });
+
+export const removeGroupAvatar = (chatId, payload) =>
+  apiFetch(`${API_BASE}/api/chats/group/${encodeURIComponent(chatId)}/avatar`, {
+    method: "DELETE",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+
+export const getSavedMessagesChat = (username) =>
+  apiFetch(`${API_BASE}/api/chats/saved?username=${encodeURIComponent(username)}`);
+
+export const setChatMute = (chatId, payload) =>
+  apiFetch(`${API_BASE}/api/chats/${encodeURIComponent(chatId)}/mute`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+
+export const hideChats = ({ username, chatIds }) =>
+  apiFetch(`${API_BASE}/api/chats/hide`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ username, chatIds }),
+  });
+
+export const listMessages = (chatId, params = {}) => {
+  const search = new URLSearchParams(params);
+  const query = search.toString();
+  const suffix = query ? `?${query}` : "";
+  return apiFetch(`${API_BASE}/api/messages/${chatId}${suffix}`);
+};
+
+export const listMessagesByQuery = (params = {}, options = {}) => {
+  const search = new URLSearchParams(params);
+  const query = search.toString();
+  const suffix = query ? `?${query}` : "";
+  return apiFetch(`${API_BASE}/api/messages${suffix}`, options);
+};
+
+export const sendMessage = (payload) =>
+  apiFetch(`${API_BASE}/api/messages`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+
+export const editMessage = (payload) =>
+  apiFetch(`${API_BASE}/api/messages/edit`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+
+export const deleteMessage = (payload) =>
+  apiFetch(`${API_BASE}/api/messages/delete`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+
+export const toggleMessageReaction = (payload) =>
+  apiFetch(`${API_BASE}/api/messages/react`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+
+export const forwardMessage = (payload) =>
+  apiFetch(`${API_BASE}/api/messages/forward`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+
+export const sendTypingIndicator = (payload) =>
+  apiFetch(`${API_BASE}/api/messages/typing`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+
+export const deletePendingMessage = (clientId) =>
+  apiFetch(`${API_BASE}/api/messages/pending/${clientId}`, {
+    method: "DELETE",
+  });
+
+export const getSseStreamUrl = (username) =>
+  `${API_BASE}/api/events?username=${encodeURIComponent(username)}`;
+
+export const getMessagesUploadUrl = () => `${API_BASE}/api/messages/upload`;
