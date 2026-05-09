@@ -6,6 +6,8 @@ function registerAuthRoutes(app, deps) {
     USERNAME_REGEX,
     ACCOUNT_CREATION,
     ADMIN_USERNAMES = [],
+    adminRun,
+    adminSave,
     bcrypt,
     clearSessionCookie,
     createSession,
@@ -37,6 +39,26 @@ function registerAuthRoutes(app, deps) {
     ipAddress: getRequestIp(req),
     userAgent: String(req.headers?.["user-agent"] || "").slice(0, 500),
   });
+
+  const recordSecurityEvent = (req, type, details = {}) => {
+    try {
+      adminRun?.(
+        `INSERT INTO security_events (type, username, user_id, ip_address, user_agent, details)
+         VALUES (?, ?, ?, ?, ?, ?)`,
+        [
+          String(type || ""),
+          String(details.username || "").trim().toLowerCase() || null,
+          Number(details.userId || 0) || null,
+          getRequestIp(req),
+          String(req.headers?.["user-agent"] || "").slice(0, 500),
+          JSON.stringify(details),
+        ],
+      );
+      adminSave?.();
+    } catch (error) {
+      console.warn("[security] event log failed:", String(error?.message || error));
+    }
+  };
 
   app.post("/api/register", (req, res) => {
     if (!ACCOUNT_CREATION) {
@@ -130,10 +152,19 @@ function registerAuthRoutes(app, deps) {
     const user = findUserByUsername(trimmed);
 
     if (user?.banned) {
+      recordSecurityEvent(req, "login.banned", {
+        username: trimmed,
+        userId: user.id,
+      });
       return res.status(403).json({ error: "Account is banned." });
     }
 
     if (!user || !bcrypt.compareSync(password, user.password_hash)) {
+      recordSecurityEvent(req, "login.failed", {
+        username: trimmed,
+        userId: user?.id || null,
+        reason: "invalid_credentials",
+      });
       return res.status(401).json({ error: "Invalid credentials." });
     }
 
@@ -153,7 +184,9 @@ function registerAuthRoutes(app, deps) {
       status: user.status || "online",
       role: user.role || "user",
       isAdmin:
-        String(user.role || "").toLowerCase() === "admin" ||
+        ["owner", "admin", "moderator", "support"].includes(
+          String(user.role || "").toLowerCase(),
+        ) ||
         ADMIN_USERNAMES.includes(String(user.username || "").toLowerCase()),
     });
   });
@@ -173,7 +206,9 @@ function registerAuthRoutes(app, deps) {
       status: session.status || "online",
       role: session.role || "user",
       isAdmin:
-        String(session.role || "").toLowerCase() === "admin" ||
+        ["owner", "admin", "moderator", "support"].includes(
+          String(session.role || "").toLowerCase(),
+        ) ||
         ADMIN_USERNAMES.includes(String(session.username || "").toLowerCase()),
     });
   });
