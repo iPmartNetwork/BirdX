@@ -5999,7 +5999,9 @@ const peerStatusLabel = !activeHeaderPeer || activeHeaderPeer?.isDeleted
         members: editingGroup
           ? Array.from(
               new Set([
-                ...((activeChat?.members || [])
+                ...((Array.isArray(activeChat?.members)
+                  ? activeChat.members
+                  : [])
                   .map((member) => String(member?.username || "").toLowerCase())
                   .filter(
                     (memberUsername) =>
