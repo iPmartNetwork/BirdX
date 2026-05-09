@@ -2,7 +2,7 @@
 
 All notable changes to BirdX are documented in this file.
 
-## v2.4.1rc1 - 2026-05-09
+## v2.4.2 - 2026-05-09
 
 ### Added
 
