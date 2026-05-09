@@ -1,4 +1,4 @@
-const CACHE_VERSION = "v0.9.1.3";
+const CACHE_VERSION = "v2.4.1rc1";
 const CACHE_NAME = `birdx-${CACHE_VERSION}`;
 const APP_SHELL = [
   "/",
