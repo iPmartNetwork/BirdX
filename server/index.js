@@ -20,6 +20,7 @@ import { createMessageFileJobs } from "./lib/messageFileJobs.js";
 import { createInspector } from "./lib/inspect.js";
 import { createSessionHelpers } from "./lib/sessions.js";
 import { storageEncryption } from "./lib/storageEncryption.js";
+import { createRemoteChannelManager } from "./lib/remoteChannels.js";
 import { buildTimestampSchedule } from "./lib/timeUtils.js";
 import { isLoopbackRequest, parseUploadFileMetadata } from "./lib/requestUtils.js";
 import { USER_COLORS, setUserColor } from "./settings/colors.js";
@@ -57,16 +58,26 @@ import {
   findUserById,
   findUserByUsername,
   finishCallLog,
+  claimNextRemoteChannelQueueItem,
+  enqueueRemoteChannelQueueItem,
   getMessageReadCounts,
   getMessageAuthors,
   getMessageReadByUser,
   getMessages,
+  getRemoteChannelQueueSummary,
+  getRemoteChannelSourceByChatId,
+  getRemoteChannelSourceById,
   recordMessageReads,
+  listEnabledRemoteChannelSources,
   listMessageFilesByMessageIds,
   markGroupMemberRemoved,
   markChatMemberLeft,
+  markRemoteChannelQueueItemDone,
+  markRemoteChannelQueueItemRetry,
+  markRemoteChannelQueueItemSkipped,
   regenerateGroupInviteToken,
   removeChatMember,
+  releaseStaleRemoteChannelQueueItems,
   setMessageExpiresAt,
   setMessageForwardOrigin,
   getSession,
@@ -92,10 +103,13 @@ import {
   updateUserStatus,
   updateGroupChat,
   updateChannelChat,
+  updateRemoteChannelSourceError,
+  updateRemoteChannelSourceSeen,
   unhideChat,
   getChatMemberRole,
   setChatMemberRole,
   upsertPushSubscription,
+  upsertRemoteChannelSource,
   deletePushSubscription,
   listPushSubscriptionsByUserIds,
   listMutedUserIdsForChat,
@@ -253,6 +267,53 @@ const TRANSCODE_VIDEOS_TO_H264 = readEnvBool(
 );
 
 const FILE_UPLOAD = readEnvBool("FILE_UPLOAD", true);
+const REMOTE_CHANNEL = readEnvBool("REMOTE_CHANNEL", false);
+const REMOTE_CHANNEL_TELEGRAM_API_ID = readEnvInt(
+  "REMOTE_CHANNEL_TELEGRAM_API_ID",
+  0,
+  { min: 1 },
+);
+const REMOTE_CHANNEL_TELEGRAM_API_HASH = String(
+  process.env.REMOTE_CHANNEL_TELEGRAM_API_HASH || "",
+).trim();
+const REMOTE_CHANNEL_TELEGRAM_SESSION_STRING = String(
+  process.env.REMOTE_CHANNEL_TELEGRAM_SESSION_STRING || "",
+).trim();
+const REMOTE_CHANNEL_PROXY_URL = String(
+  process.env.REMOTE_CHANNEL_PROXY_URL || "",
+).trim();
+const REMOTE_CHANNEL_TELEGRAM_CONFIGURED = Boolean(
+  REMOTE_CHANNEL_TELEGRAM_API_ID &&
+    REMOTE_CHANNEL_TELEGRAM_API_HASH &&
+    REMOTE_CHANNEL_TELEGRAM_SESSION_STRING,
+);
+const REMOTE_CHANNEL_CONFIG = {
+  enabled: REMOTE_CHANNEL,
+  telegramConfigured: REMOTE_CHANNEL_TELEGRAM_CONFIGURED,
+  proxyConfigured: Boolean(REMOTE_CHANNEL_PROXY_URL),
+  telegramApiId: REMOTE_CHANNEL_TELEGRAM_API_ID,
+  telegramApiHash: REMOTE_CHANNEL_TELEGRAM_API_HASH,
+  telegramSessionString: REMOTE_CHANNEL_TELEGRAM_SESSION_STRING,
+  proxyUrl: REMOTE_CHANNEL_PROXY_URL,
+  pollIntervalMs: readEnvInt("REMOTE_CHANNEL_POLL_INTERVAL_MS", 5000, {
+    min: 1000,
+  }),
+  telegramPollLimit: readEnvInt("REMOTE_CHANNEL_TELEGRAM_POLL_LIMIT", 50, {
+    min: 1,
+    max: 100,
+  }),
+  queueIntervalMs: readEnvInt("REMOTE_CHANNEL_QUEUE_INTERVAL_MS", 1000, {
+    min: 100,
+  }),
+  queueMaxAttempts: readEnvInt("REMOTE_CHANNEL_QUEUE_MAX_ATTEMPTS", 10, {
+    min: 1,
+    max: 100,
+  }),
+  queueStaleLockMs: readEnvInt("REMOTE_CHANNEL_QUEUE_STALE_LOCK_MS", 300000, {
+    min: 10000,
+  }),
+  messageMaxChars: MESSAGE_MAX_CHARS,
+};
 const MESSAGE_FILE_CLEANUP_INTERVAL_MS = 60 * 60 * 1000;
 
 const uploadTools = createUploadTools({
@@ -475,6 +536,11 @@ const apiDeps = {
   ACCOUNT_CREATION,
   APP_ENV: appEnv,
   ADMIN_USERNAMES,
+  REMOTE_CHANNELS: {
+    enabled: REMOTE_CHANNEL_CONFIG.enabled,
+    telegramConfigured: REMOTE_CHANNEL_CONFIG.telegramConfigured,
+    proxyConfigured: REMOTE_CHANNEL_CONFIG.proxyConfigured,
+  },
   USERNAME_REGEX,
   VAPID_PUBLIC_KEY: PUSH_ENABLED ? VAPID_PUBLIC_KEY : "",
   addChatMember,
@@ -488,6 +554,7 @@ const apiDeps = {
   bcrypt,
   buildInspectSnapshot,
   buildTimestampSchedule,
+  claimNextRemoteChannelQueueItem,
   chunkArray,
   cleanupMissingMessageFiles,
   clearGroupMemberRemoved,
@@ -510,6 +577,7 @@ const apiDeps = {
   deleteUserById,
   emitChatEvent,
   emitSseEvent,
+  enqueueRemoteChannelQueueItem,
   enqueueVideoTranscodeJob,
   ensureAvatarExists,
   ensureFfmpegAvailable,
@@ -527,6 +595,9 @@ const apiDeps = {
   getMessageAuthors,
   getMessageReadByUser,
   getMessages,
+  getRemoteChannelQueueSummary,
+  getRemoteChannelSourceByChatId,
+  getRemoteChannelSourceById,
   getSessionFromRequest,
   getUploadKind,
   getUserPresence,
@@ -545,6 +616,7 @@ const apiDeps = {
   listCallLogsForChat,
   listChatMembers,
   listChatsForUser,
+  listEnabledRemoteChannelSources,
   listMessageFilesByMessageIds,
   listUsers,
   setMessageForwardOrigin,
@@ -556,12 +628,16 @@ const apiDeps = {
   markMessagesRead,
   markMessageRead,
   markCallLogAccepted,
+  markRemoteChannelQueueItemDone,
+  markRemoteChannelQueueItemRetry,
+  markRemoteChannelQueueItemSkipped,
   parseCookies,
   parseUploadFileMetadata,
   path,
   projectRootDir,
   probeVideoMetadata,
   regenerateGroupInviteToken,
+  releaseStaleRemoteChannelQueueItems,
   removeAllMessageUploads,
   removeAvatarByUrl,
   removeChatMember,
@@ -584,6 +660,8 @@ const apiDeps = {
   updateLastSeen,
   updateGroupChat,
   updateChannelChat,
+  updateRemoteChannelSourceError,
+  updateRemoteChannelSourceSeen,
   unhideChat,
   updateUserPassword,
   updateUserProfile,
@@ -592,11 +670,37 @@ const apiDeps = {
   uploadFiles,
   uploadRootDir,
   upsertPushSubscription,
+  upsertRemoteChannelSource,
   sendPushNotificationToUsers,
   storageEncryption,
   getMessageReactions,
   toggleMessageReaction,
 };
+
+const remoteChannelManager = createRemoteChannelManager({
+  config: REMOTE_CHANNEL_CONFIG,
+  createOrReuseMessage,
+  debugLog,
+  emitChatEvent,
+  enqueueRemoteChannelQueueItem,
+  findChatById,
+  findUserById,
+  getRemoteChannelSourceById,
+  listChatMembers,
+  listEnabledRemoteChannelSources,
+  listMutedUserIdsForChat,
+  markRemoteChannelQueueItemDone,
+  markRemoteChannelQueueItemRetry,
+  markRemoteChannelQueueItemSkipped,
+  releaseStaleRemoteChannelQueueItems,
+  claimNextRemoteChannelQueueItem,
+  sendPushNotificationToUsers,
+  setMessageForwardOrigin,
+  updateRemoteChannelSourceError,
+  updateRemoteChannelSourceSeen,
+});
+
+apiDeps.remoteChannelManager = remoteChannelManager;
 
 registerApiRoutes(app, apiDeps);
 
@@ -816,6 +920,7 @@ if (MESSAGE_TEXT_RETENTION_DAYS > 0) {
 
 bootstrapEnvAdmins();
 backfillStorageEncryption();
+remoteChannelManager.start();
 
 const httpServer = createServer(app);
 
