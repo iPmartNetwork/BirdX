@@ -447,6 +447,347 @@ export function searchPublicChannels(query, viewerUserId, limit = 20) {
   );
 }
 
+const normalizeRemoteSourceUsername = (value) =>
+  String(value || "")
+    .trim()
+    .replace(/^@+/, "")
+    .toLowerCase() || null;
+
+const normalizeRemoteSourceChatId = (value) => {
+  const raw = String(value || "").trim();
+  return raw || null;
+};
+
+export function getRemoteChannelSourceByChatId(chatId) {
+  return getRow(
+    `SELECT id, chat_id, provider, source_raw, source_chat_id, source_username,
+            source_title, source_avatar_url, last_remote_message_id, enabled,
+            source_version, sync_metadata, stream_media, last_error, last_seen_at,
+            created_at, updated_at
+     FROM remote_channel_sources
+     WHERE chat_id = ? AND provider = 'telegram'`,
+    [Number(chatId)],
+  );
+}
+
+export function getRemoteChannelSourceById(sourceId) {
+  return getRow(
+    `SELECT id, chat_id, provider, source_raw, source_chat_id, source_username,
+            source_title, source_avatar_url, last_remote_message_id, enabled,
+            source_version, sync_metadata, stream_media, last_error, last_seen_at,
+            created_at, updated_at
+     FROM remote_channel_sources
+     WHERE id = ? AND provider = 'telegram'`,
+    [Number(sourceId)],
+  );
+}
+
+export function upsertRemoteChannelSource(payload = {}) {
+  const chatId = Number(payload.chatId || 0);
+  if (!chatId) return null;
+
+  const sourceRaw = String(payload.sourceRaw || "").trim() || null;
+  const sourceChatId = normalizeRemoteSourceChatId(payload.sourceChatId);
+  const sourceUsername = normalizeRemoteSourceUsername(payload.sourceUsername);
+  const enabled = payload.enabled ? 1 : 0;
+  const syncMetadata = payload.syncMetadata ? 1 : 0;
+  const streamMedia = payload.streamMedia ? 1 : 0;
+  const current = getRemoteChannelSourceByChatId(chatId);
+  const sourceChanged = Boolean(
+    current?.id &&
+      (String(current.source_raw || "") !== String(sourceRaw || "") ||
+        String(current.source_chat_id || "") !== String(sourceChatId || "") ||
+        String(current.source_username || "") !== String(sourceUsername || "")),
+  );
+  const sourceVersion = sourceChanged
+    ? Math.max(1, Number(current?.source_version || 1) || 1) + 1
+    : Math.max(1, Number(current?.source_version || 1) || 1);
+
+  run(
+    `INSERT INTO remote_channel_sources (
+       chat_id, provider, source_raw, source_chat_id, source_username,
+       source_version, sync_metadata, stream_media, enabled, last_error, updated_at
+     )
+     VALUES (?, 'telegram', ?, ?, ?, ?, ?, ?, ?, NULL, datetime('now'))
+     ON CONFLICT(chat_id) DO UPDATE SET
+       provider = excluded.provider,
+       source_title = CASE
+         WHEN COALESCE(remote_channel_sources.source_raw, '') != COALESCE(excluded.source_raw, '')
+           OR COALESCE(remote_channel_sources.source_chat_id, '') != COALESCE(excluded.source_chat_id, '')
+           OR COALESCE(remote_channel_sources.source_username, '') != COALESCE(excluded.source_username, '')
+         THEN NULL
+         ELSE remote_channel_sources.source_title
+       END,
+       source_avatar_url = CASE
+         WHEN COALESCE(remote_channel_sources.source_raw, '') != COALESCE(excluded.source_raw, '')
+           OR COALESCE(remote_channel_sources.source_chat_id, '') != COALESCE(excluded.source_chat_id, '')
+           OR COALESCE(remote_channel_sources.source_username, '') != COALESCE(excluded.source_username, '')
+         THEN NULL
+         ELSE remote_channel_sources.source_avatar_url
+       END,
+       last_remote_message_id = CASE
+         WHEN COALESCE(remote_channel_sources.source_raw, '') != COALESCE(excluded.source_raw, '')
+           OR COALESCE(remote_channel_sources.source_chat_id, '') != COALESCE(excluded.source_chat_id, '')
+           OR COALESCE(remote_channel_sources.source_username, '') != COALESCE(excluded.source_username, '')
+         THEN NULL
+         ELSE remote_channel_sources.last_remote_message_id
+       END,
+       source_raw = excluded.source_raw,
+       source_chat_id = excluded.source_chat_id,
+       source_username = excluded.source_username,
+       source_version = excluded.source_version,
+       sync_metadata = excluded.sync_metadata,
+       stream_media = excluded.stream_media,
+       enabled = excluded.enabled,
+       last_error = NULL,
+       updated_at = datetime('now')`,
+    [
+      chatId,
+      sourceRaw,
+      sourceChatId,
+      sourceUsername,
+      sourceVersion,
+      syncMetadata,
+      streamMedia,
+      enabled,
+    ],
+  );
+
+  if (current?.id && (sourceChanged || !enabled)) {
+    run(
+      `UPDATE remote_channel_queue
+       SET status = 'skipped',
+           locked_at = NULL,
+           lock_owner = NULL,
+           last_error = ?,
+           processed_at = datetime('now')
+       WHERE source_id = ?
+         AND status IN ('pending', 'retry', 'processing')`,
+      [
+        sourceChanged
+          ? "Remote source changed before this item was mirrored."
+          : "Remote Channel was disabled before this item was mirrored.",
+        Number(current.id),
+      ],
+    );
+  }
+  saveDatabase();
+
+  return getRemoteChannelSourceByChatId(chatId);
+}
+
+export function listEnabledRemoteChannelSources(provider = "telegram") {
+  return getAll(
+    `SELECT id, chat_id, provider, source_raw, source_chat_id, source_username,
+            source_title, source_avatar_url, last_remote_message_id, enabled,
+            source_version, sync_metadata, stream_media, last_error, last_seen_at,
+            created_at, updated_at
+     FROM remote_channel_sources
+     WHERE provider = ? AND enabled = 1
+     ORDER BY id ASC`,
+    [String(provider || "telegram")],
+  );
+}
+
+export function updateRemoteChannelSourceSeen(sourceId, payload = {}) {
+  const sourceChatId = normalizeRemoteSourceChatId(payload.sourceChatId);
+  const sourceUsername = normalizeRemoteSourceUsername(payload.sourceUsername);
+  const sourceTitle = Object.prototype.hasOwnProperty.call(payload, "sourceTitle")
+    ? String(payload.sourceTitle || "").trim() || null
+    : undefined;
+  const lastRemoteMessageId = Number.isFinite(Number(payload.lastRemoteMessageId))
+    ? Math.max(0, Math.trunc(Number(payload.lastRemoteMessageId)))
+    : null;
+  run(
+    `UPDATE remote_channel_sources
+     SET source_chat_id = COALESCE(?, source_chat_id),
+         source_username = COALESCE(?, source_username),
+         source_title = CASE WHEN ? THEN ? ELSE source_title END,
+         last_remote_message_id = CASE
+           WHEN ? IS NOT NULL AND (
+             last_remote_message_id IS NULL OR ? > last_remote_message_id
+           ) THEN ?
+           ELSE last_remote_message_id
+         END,
+         last_seen_at = datetime('now'),
+         last_error = NULL,
+         updated_at = datetime('now')
+     WHERE id = ?`,
+    [
+      sourceChatId,
+      sourceUsername,
+      sourceTitle !== undefined ? 1 : 0,
+      sourceTitle === undefined ? null : sourceTitle,
+      lastRemoteMessageId,
+      lastRemoteMessageId,
+      lastRemoteMessageId,
+      Number(sourceId),
+    ],
+  );
+  saveDatabase();
+}
+
+export function updateRemoteChannelSourceError(sourceId, error) {
+  run(
+    `UPDATE remote_channel_sources
+     SET last_error = ?, updated_at = datetime('now')
+     WHERE id = ?`,
+    [String(error || "").slice(0, 1000) || null, Number(sourceId)],
+  );
+  saveDatabase();
+}
+
+export function enqueueRemoteChannelQueueItem(payload = {}) {
+  const sourceId = Number(payload.sourceId || 0);
+  const payloadJson = String(payload.payloadJson || "").trim();
+  if (!sourceId || !payloadJson) return null;
+  const telegramUpdateId = Number.isFinite(Number(payload.telegramUpdateId))
+    ? Math.trunc(Number(payload.telegramUpdateId))
+    : null;
+  const telegramMessageId = Number.isFinite(Number(payload.telegramMessageId))
+    ? Math.trunc(Number(payload.telegramMessageId))
+    : null;
+  const sourceVersion = Math.max(1, Math.trunc(Number(payload.sourceVersion || 1)) || 1);
+
+  run(
+    `INSERT OR IGNORE INTO remote_channel_queue (
+       source_id, provider, telegram_update_id, telegram_message_id,
+       source_version, payload_json, status, next_attempt_at
+     )
+     VALUES (?, 'telegram', ?, ?, ?, ?, 'pending', datetime('now'))`,
+    [sourceId, telegramUpdateId, telegramMessageId, sourceVersion, payloadJson],
+  );
+  saveDatabase();
+}
+
+export function getRemoteChannelQueueSummary(sourceId) {
+  const rows = getAll(
+    `SELECT status, COUNT(*) AS count
+     FROM remote_channel_queue
+     WHERE source_id = ?
+     GROUP BY status`,
+    [Number(sourceId)],
+  );
+  return rows.reduce((acc, row) => {
+    const status = String(row?.status || "").trim() || "unknown";
+    acc[status] = Number(row?.count || 0);
+    return acc;
+  }, {});
+}
+
+export function releaseStaleRemoteChannelQueueItems(staleBeforeIso) {
+  run(
+    `UPDATE remote_channel_queue
+     SET status = 'retry',
+         locked_at = NULL,
+         lock_owner = NULL,
+         next_attempt_at = datetime('now')
+     WHERE status = 'processing'
+       AND locked_at IS NOT NULL
+       AND julianday(locked_at) <= julianday(?)`,
+    [String(staleBeforeIso || new Date().toISOString())],
+  );
+}
+
+export function claimNextRemoteChannelQueueItem(lockOwner, nowIso) {
+  const now = String(nowIso || new Date().toISOString());
+  const row = getRow(
+    `SELECT q.id, q.source_id, q.provider, q.telegram_update_id,
+            q.telegram_message_id, q.source_version, q.payload_json, q.status,
+            q.attempts, q.next_attempt_at, q.locked_at, q.lock_owner,
+            q.last_error, q.created_message_id, q.created_at, q.processed_at,
+            s.chat_id, s.source_raw, s.source_chat_id, s.source_username,
+            s.source_title, s.source_avatar_url, s.last_remote_message_id,
+            s.source_version AS current_source_version, s.sync_metadata,
+            s.stream_media,
+            c.name AS target_chat_name, c.created_by_user_id
+     FROM remote_channel_queue q
+     JOIN remote_channel_sources s ON s.id = q.source_id
+     JOIN chats c ON c.id = s.chat_id
+     WHERE q.provider = 'telegram'
+       AND s.provider = 'telegram'
+       AND s.enabled = 1
+       AND q.source_version = s.source_version
+       AND c.type = 'channel'
+       AND q.status IN ('pending', 'retry')
+       AND (
+         q.next_attempt_at IS NULL
+         OR q.next_attempt_at = ''
+         OR julianday(q.next_attempt_at) <= julianday(?)
+       )
+     ORDER BY julianday(q.created_at) ASC, q.id ASC
+     LIMIT 1`,
+    [now],
+  );
+  if (!row?.id) return null;
+
+  run(
+    `UPDATE remote_channel_queue
+     SET status = 'processing',
+         locked_at = ?,
+         lock_owner = ?
+     WHERE id = ?
+       AND status IN ('pending', 'retry')`,
+    [now, String(lockOwner || "remote-channel-worker"), Number(row.id)],
+  );
+
+  return {
+    ...row,
+    status: "processing",
+    locked_at: now,
+    lock_owner: String(lockOwner || "remote-channel-worker"),
+  };
+}
+
+export function markRemoteChannelQueueItemDone(id, messageId) {
+  run(
+    `UPDATE remote_channel_queue
+     SET status = 'done',
+         locked_at = NULL,
+         lock_owner = NULL,
+         last_error = NULL,
+         created_message_id = ?,
+         processed_at = datetime('now')
+     WHERE id = ?`,
+    [Number(messageId) || null, Number(id)],
+  );
+  saveDatabase();
+}
+
+export function markRemoteChannelQueueItemSkipped(id, reason) {
+  run(
+    `UPDATE remote_channel_queue
+     SET status = 'skipped',
+         locked_at = NULL,
+         lock_owner = NULL,
+         last_error = ?,
+         processed_at = datetime('now')
+     WHERE id = ?`,
+    [String(reason || "Skipped").slice(0, 1000), Number(id)],
+  );
+  saveDatabase();
+}
+
+export function markRemoteChannelQueueItemRetry(id, payload = {}) {
+  run(
+    `UPDATE remote_channel_queue
+     SET status = ?,
+         attempts = attempts + 1,
+         next_attempt_at = ?,
+         locked_at = NULL,
+         lock_owner = NULL,
+         last_error = ?
+     WHERE id = ?`,
+    [
+      payload.failed ? "failed" : "retry",
+      payload.failed ? null : String(payload.nextAttemptAt || new Date().toISOString()),
+      String(payload.error || "").slice(0, 1000) || null,
+      Number(id),
+    ],
+  );
+  saveDatabase();
+}
+
 export function removeChatMember(chatId, userId) {
   run("DELETE FROM chat_members WHERE chat_id = ? AND user_id = ?", [
     Number(chatId),
@@ -878,6 +1219,16 @@ export function deleteChatById(chatId) {
     runWithoutSave("DELETE FROM chat_mutes WHERE chat_id = ?", [targetChatId]);
     runWithoutSave("DELETE FROM chat_left_members WHERE chat_id = ?", [targetChatId]);
     runWithoutSave("DELETE FROM group_removed_members WHERE chat_id = ?", [targetChatId]);
+    runWithoutSave(
+      `DELETE FROM remote_channel_queue
+       WHERE source_id IN (
+         SELECT id FROM remote_channel_sources WHERE chat_id = ?
+       )`,
+      [targetChatId],
+    );
+    runWithoutSave("DELETE FROM remote_channel_sources WHERE chat_id = ?", [
+      targetChatId,
+    ]);
     runWithoutSave(
       `DELETE FROM call_log_participants
        WHERE call_log_id IN (SELECT id FROM call_logs WHERE chat_id = ?)`,
