@@ -1,3 +1,5 @@
+import { createInviteToken } from "../lib/inviteTokens.js";
+
 function registerChatRoutes(app, deps) {
   const {
     USERNAME_REGEX,
@@ -7,7 +9,6 @@ function registerChatRoutes(app, deps) {
     avatarUploadRootDir,
     cleanupMissingMessageFiles,
     clearChatMemberLeft,
-    crypto,
     createChat,
     createMessage,
     deleteChatById,
@@ -390,7 +391,7 @@ function registerChatRoutes(app, deps) {
       String(visibility || "").toLowerCase() === "private"
         ? "private"
         : "public";
-    const inviteToken = crypto.randomBytes(24).toString("hex");
+    const inviteToken = createInviteToken();
     const chatId = createChat(groupNickname, normalizedType, {
       groupUsername,
       groupVisibility: normalizedVisibility,
@@ -669,7 +670,7 @@ function registerChatRoutes(app, deps) {
         .json({ error: `Only ${label} owner can regenerate invite link.` });
     }
 
-    const inviteToken = crypto.randomBytes(24).toString("hex");
+    const inviteToken = createInviteToken();
     regenerateGroupInviteToken(chatId, inviteToken);
     const baseOrigin = resolveClientBaseOrigin(req);
     return res.json({
