@@ -22,6 +22,7 @@ import {
   renderMarkdownBlock,
   renderMarkdownInlinePlain,
 } from "../../../utils/markdown.js";
+import { isMessageAuthoredByUser } from "../../../utils/messageOwnership.js";
 import { copyTextToClipboard } from "../../../utils/clipboard.js";
 import {
   extractMessageBodyText,
@@ -157,7 +158,7 @@ export const MessageItem = memo(function MessageItem({
   canSwipeReply = true,
   onOpenContextMenu,
 }) {
-  const isOwn = !isChannelChat && msg.username === user.username;
+  const isOwn = !isChannelChat && isMessageAuthoredByUser(msg, user);
   const isRead = Boolean(msg.read_at);
   const isEdited = Boolean(Number(msg?.edited || 0) || msg?._edited);
   const forwardedFromChatId = Number(msg?.forwarded_from_chat_id || 0);
