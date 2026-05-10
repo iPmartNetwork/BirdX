@@ -69,6 +69,7 @@ import {
   writeMessagesIndex,
 } from "../utils/chatCache.js";
 import { getMessageFiles } from "../utils/messageContent.js";
+import { isMessageAuthoredByUser } from "../utils/messageOwnership.js";
 import {
   createDmChat,
   discoverUsersAndGroups,
@@ -81,6 +82,7 @@ import {
   fetchHealth,
   fetchChatCallLogs,
   fetchPresence,
+  getRemoteChannelSettings,
   getChatPreview,
   getGroupInviteLink,
   getMessagesUploadUrl,
@@ -104,6 +106,7 @@ import {
   updateChannelChat,
   getMessageReadCounts,
   updateGroupChat,
+  updateRemoteChannelSettings,
   uploadGroupAvatar,
   getSavedMessagesChat,
   fetchPushPublicKey,
@@ -3240,19 +3243,16 @@ const peerStatusLabel = !activeHeaderPeer || activeHeaderPeer?.isDeleted
     (message) => {
       if (String(activeChat?.type || "").toLowerCase() === "saved") return false;
       const messageAuthor = String(message?.username || "").toLowerCase();
-      const currentUsername = String(user?.username || "").toLowerCase();
       if (!messageAuthor) return false;
-      if (messageAuthor === currentUsername) return true;
+      if (isMessageAuthoredByUser(message, user)) return true;
       return canCurrentUserEditGroup;
     },
-    [activeChat?.type, canCurrentUserEditGroup, user?.username],
+    [activeChat?.type, canCurrentUserEditGroup, user],
   );
 
   const canEditMessageFromContext = useCallback(
-    (message) =>
-      String(message?.username || "").toLowerCase() ===
-      String(user?.username || "").toLowerCase(),
-    [user?.username],
+    (message) => isMessageAuthoredByUser(message, user),
+    [user],
   );
 
   function handleDeleteMessageRequest(message, _options = {}) {
@@ -5730,6 +5730,13 @@ const peerStatusLabel = !activeHeaderPeer || activeHeaderPeer?.isDeleted
   const openNewGroupModal = () => {
     setEditingGroup(false);
     setGroupModalType("group");
+    setNewGroupForm((prev) => ({
+      ...prev,
+      remoteChannelEnabled: false,
+      remoteChannelSource: "",
+      remoteChannelStatus: null,
+      remoteChannelLoading: false,
+    }));
     setNewGroupOpen(true);
     setNewGroupError("");
   };
@@ -5737,6 +5744,16 @@ const peerStatusLabel = !activeHeaderPeer || activeHeaderPeer?.isDeleted
   const openNewChannelModal = () => {
     setEditingGroup(false);
     setGroupModalType("channel");
+    setNewGroupForm((prev) => ({
+      ...prev,
+      remoteChannelEnabled: false,
+      remoteChannelProvider: "telegram",
+      remoteChannelSource: "",
+      remoteChannelSyncMetadata: false,
+      remoteChannelStreamMedia: false,
+      remoteChannelStatus: null,
+      remoteChannelLoading: false,
+    }));
     setNewGroupOpen(true);
     setNewGroupError("");
   };
@@ -5751,6 +5768,13 @@ const peerStatusLabel = !activeHeaderPeer || activeHeaderPeer?.isDeleted
       username: "",
       visibility: "public",
       allowMemberInvites: true,
+      remoteChannelEnabled: false,
+      remoteChannelProvider: "telegram",
+      remoteChannelSource: "",
+      remoteChannelSyncMetadata: false,
+      remoteChannelStreamMedia: false,
+      remoteChannelStatus: null,
+      remoteChannelLoading: false,
     });
     setNewGroupSearch("");
     setNewGroupSearchResults([]);
@@ -5984,6 +6008,14 @@ const peerStatusLabel = !activeHeaderPeer || activeHeaderPeer?.isDeleted
           chatForEdit.allow_member_invites === 1 ||
           String(chatForEdit.allow_member_invites || "").toLowerCase() ===
             "true",
+        remoteChannelEnabled: false,
+        remoteChannelProvider: "telegram",
+        remoteChannelSource: "",
+        remoteChannelSyncMetadata: false,
+        remoteChannelStreamMedia: false,
+        remoteChannelStatus: null,
+        remoteChannelLoading:
+          chatType === "channel" && Boolean(appInfo?.remoteChannels?.enabled),
       };
 
       revokeObjectUrlSafe(pendingGroupAvatarFile?.previewUrl);
@@ -6011,6 +6043,41 @@ const peerStatusLabel = !activeHeaderPeer || activeHeaderPeer?.isDeleted
             }
           } catch {
             // Ignore invite fetch errors in edit modal.
+          }
+        })();
+      }
+      if (chatId && chatType === "channel" && appInfo?.remoteChannels?.enabled) {
+        void (async () => {
+          try {
+            const res = await getRemoteChannelSettings({
+              chatId,
+              username: user.username,
+            });
+            const data = await res.json();
+            if (!res.ok) throw new Error(data?.error || "Unable to load Remote Channel.");
+            const source = data?.source || null;
+            setNewGroupForm((prev) => ({
+              ...prev,
+              remoteChannelEnabled: Boolean(source?.enabled),
+              remoteChannelProvider: source?.provider || "telegram",
+              remoteChannelSource:
+                source?.sourceRaw ||
+                (source?.sourceUsername ? `@${source.sourceUsername}` : "") ||
+                source?.sourceChatId ||
+                "",
+              remoteChannelSyncMetadata: Boolean(source?.syncMetadata),
+              remoteChannelStreamMedia: Boolean(source?.streamMedia),
+              remoteChannelStatus: data,
+              remoteChannelLoading: false,
+            }));
+          } catch (error) {
+            setNewGroupForm((prev) => ({
+              ...prev,
+              remoteChannelStatus: {
+                error: error?.message || "Unable to load Remote Channel settings.",
+              },
+              remoteChannelLoading: false,
+            }));
           }
         })();
       }
@@ -6113,6 +6180,24 @@ const peerStatusLabel = !activeHeaderPeer || activeHeaderPeer?.isDeleted
       );
       return;
     }
+    const remoteChannelEnabled =
+      isChannel &&
+      appInfo?.remoteChannels?.enabled &&
+      Boolean(newGroupForm.remoteChannelEnabled);
+    const remoteChannelSource = String(
+      newGroupForm.remoteChannelSource || "",
+    ).trim();
+    const shouldSaveRemoteChannel =
+      isChannel &&
+      appInfo?.remoteChannels?.enabled &&
+      (remoteChannelEnabled ||
+        remoteChannelSource ||
+        Boolean(newGroupForm.remoteChannelSyncMetadata) ||
+        Boolean(newGroupForm.remoteChannelStreamMedia));
+    if (shouldSaveRemoteChannel && remoteChannelEnabled && !remoteChannelSource) {
+      setNewGroupError("Remote Channel source is required.");
+      return;
+    }
     try {
       setCreatingGroup(true);
       setNewGroupError("");
@@ -6164,6 +6249,22 @@ const peerStatusLabel = !activeHeaderPeer || activeHeaderPeer?.isDeleted
       const nextChatId = Number(data?.id || activeChat?.id || 0);
       if (!nextChatId) {
         throw new Error("Server did not return a group id.");
+      }
+      if (shouldSaveRemoteChannel && editingGroup) {
+        const remoteRes = await updateRemoteChannelSettings(nextChatId, {
+          username: user.username,
+          enabled: remoteChannelEnabled,
+          provider: newGroupForm.remoteChannelProvider || "telegram",
+          source: remoteChannelSource,
+          syncMetadata:
+            remoteChannelEnabled && Boolean(newGroupForm.remoteChannelSyncMetadata),
+          streamMedia:
+            remoteChannelEnabled && Boolean(newGroupForm.remoteChannelStreamMedia),
+        });
+        const remoteData = await remoteRes.json();
+        if (!remoteRes.ok) {
+          throw new Error(remoteData?.error || "Unable to update Remote Channel.");
+        }
       }
       if (editingGroup && pendingGroupAvatarFile?.file) {
         const form = new FormData();
@@ -6970,6 +7071,10 @@ const peerStatusLabel = !activeHeaderPeer || activeHeaderPeer?.isDeleted
             hideSelectedMemberChips={false}
             fileUploadEnabled={CHAT_PAGE_CONFIG.fileUploadEnabled}
             showInviteManagement={editingGroup}
+            showRemoteChannelSettings={Boolean(
+              editingGroup && groupModalType === "channel",
+            )}
+            remoteChannelAvailable={Boolean(appInfo?.remoteChannels?.enabled)}
             currentInviteLink={editGroupInviteLink}
             regeneratingInviteLink={regeneratingGroupInviteLink}
             onRegenerateInvite={handleRegenerateGroupInvite}
