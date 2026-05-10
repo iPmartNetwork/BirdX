@@ -48,6 +48,8 @@ export default function NewGroupModal({
   onRegenerateInvite,
   entityLabel = "Group",
   onDeleteChat,
+  showRemoteChannelSettings = false,
+  remoteChannelAvailable = true,
 }) {
   const [copiedRegenerateLink, setCopiedRegenerateLink] = useState(false);
   const [deleteModalOpen, setDeleteModalOpen] = useState(false);
@@ -60,6 +62,13 @@ export default function NewGroupModal({
     username: String(groupForm?.username || ""),
     visibility: String(groupForm?.visibility || "public"),
     allowMemberInvites: groupForm?.allowMemberInvites !== false,
+    remoteChannelEnabled: Boolean(groupForm?.remoteChannelEnabled),
+    remoteChannelProvider: String(groupForm?.remoteChannelProvider || "telegram"),
+    remoteChannelSource: String(groupForm?.remoteChannelSource || ""),
+    remoteChannelSyncMetadata: Boolean(groupForm?.remoteChannelSyncMetadata),
+    remoteChannelStreamMedia: Boolean(groupForm?.remoteChannelStreamMedia),
+    remoteChannelStatus: groupForm?.remoteChannelStatus || null,
+    remoteChannelLoading: Boolean(groupForm?.remoteChannelLoading),
   };
   const safeSearchQuery = String(groupSearchQuery || "");
   const safeSearchResults = Array.isArray(groupSearchResults)
@@ -77,6 +86,12 @@ export default function NewGroupModal({
   const nicknameHasPersian = hasPersian(safeGroupForm.nickname);
   const usernameHasPersian = hasPersian(safeGroupForm.username);
   const groupSearchHasPersian = hasPersian(safeSearchQuery);
+  const remoteSourceHasPersian = hasPersian(safeGroupForm.remoteChannelSource);
+  const remoteLastError =
+    safeGroupForm.remoteChannelStatus?.source?.lastError ||
+    safeGroupForm.remoteChannelStatus?.error ||
+    "";
+  const remoteQueue = safeGroupForm.remoteChannelStatus?.source?.queue || {};
 
   return createPortal(
     <>
@@ -322,6 +337,121 @@ export default function NewGroupModal({
                     Regenerate
                   </button>
                 </div>
+              </div>
+            ) : null}
+
+            {showRemoteChannelSettings ? (
+              <div className="rounded-2xl border border-emerald-200 p-3 dark:border-emerald-500/30">
+                <div className="flex items-center justify-between gap-3">
+                  <div>
+                    <p className="text-sm font-semibold text-slate-700 dark:text-slate-200">
+                      Remote Channel
+                    </p>
+                    <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">
+                      Mirror posts from a Telegram channel into this channel.
+                    </p>
+                  </div>
+                  <button
+                    type="button"
+                    role="switch"
+                    aria-checked={safeGroupForm.remoteChannelEnabled}
+                    disabled={!remoteChannelAvailable}
+                    onClick={() =>
+                      remoteChannelAvailable &&
+                      setGroupForm?.((prev) => ({
+                        ...prev,
+                        remoteChannelEnabled: !prev.remoteChannelEnabled,
+                      }))
+                    }
+                    className={`h-7 w-12 rounded-full p-1 transition ${
+                      safeGroupForm.remoteChannelEnabled && remoteChannelAvailable
+                        ? "bg-emerald-500"
+                        : "bg-slate-300 dark:bg-slate-700"
+                    } ${remoteChannelAvailable ? "" : "opacity-60"}`}
+                  >
+                    <span
+                      className={`block h-5 w-5 rounded-full bg-white transition ${
+                        safeGroupForm.remoteChannelEnabled && remoteChannelAvailable
+                          ? "translate-x-5"
+                          : "translate-x-0"
+                      }`}
+                    />
+                  </button>
+                </div>
+                {!remoteChannelAvailable ? (
+                  <p className="mt-3 rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-700 dark:border-amber-500/30 dark:bg-amber-500/10 dark:text-amber-200">
+                    Remote Channel is not configured on this server.
+                  </p>
+                ) : null}
+                {safeGroupForm.remoteChannelLoading ? (
+                  <p className="mt-3 inline-flex items-center gap-2 text-xs text-slate-500 dark:text-slate-400">
+                    <LoaderCircle size={13} className="animate-spin" />
+                    Loading Remote Channel settings...
+                  </p>
+                ) : null}
+                {remoteLastError ? (
+                  <p className="mt-3 rounded-xl border border-rose-200 bg-rose-50 px-3 py-2 text-xs text-rose-700 dark:border-rose-500/30 dark:bg-rose-900/40 dark:text-rose-200">
+                    {remoteLastError}
+                  </p>
+                ) : null}
+                {safeGroupForm.remoteChannelEnabled && remoteChannelAvailable ? (
+                  <div className="mt-3 space-y-3">
+                    <div>
+                      <label className="text-xs font-semibold text-slate-600 dark:text-slate-300">
+                        Telegram source
+                      </label>
+                      <input
+                        value={safeGroupForm.remoteChannelSource}
+                        onChange={(event) =>
+                          setGroupForm?.((prev) => ({
+                            ...prev,
+                            remoteChannelSource: event.target.value,
+                          }))
+                        }
+                        placeholder="@channel or https://t.me/channel"
+                        lang={remoteSourceHasPersian ? "fa" : "en"}
+                        dir={remoteSourceHasPersian ? "rtl" : "ltr"}
+                        className={`mt-2 w-full rounded-2xl border border-emerald-200 bg-white px-4 py-3 text-sm text-slate-700 outline-none transition focus:border-emerald-400 focus:ring-2 focus:ring-emerald-300/60 dark:border-emerald-500/30 dark:bg-slate-900 dark:text-slate-100 ${
+                          remoteSourceHasPersian ? "font-fa text-right" : "text-left"
+                        }`}
+                        style={{ unicodeBidi: "plaintext" }}
+                      />
+                    </div>
+                    <label className="flex items-center justify-between gap-3 rounded-xl border border-emerald-100 bg-emerald-50/60 px-3 py-2 text-xs font-semibold text-slate-700 dark:border-emerald-500/20 dark:bg-emerald-500/10 dark:text-slate-200">
+                      <span>Sync Telegram title when saving</span>
+                      <input
+                        type="checkbox"
+                        checked={safeGroupForm.remoteChannelSyncMetadata}
+                        onChange={(event) =>
+                          setGroupForm?.((prev) => ({
+                            ...prev,
+                            remoteChannelSyncMetadata: event.target.checked,
+                          }))
+                        }
+                        className="h-4 w-4 rounded border-emerald-300 accent-emerald-500"
+                      />
+                    </label>
+                    <label className="flex items-center justify-between gap-3 rounded-xl border border-emerald-100 bg-emerald-50/60 px-3 py-2 text-xs font-semibold text-slate-700 dark:border-emerald-500/20 dark:bg-emerald-500/10 dark:text-slate-200">
+                      <span>Allow media streaming when supported</span>
+                      <input
+                        type="checkbox"
+                        checked={safeGroupForm.remoteChannelStreamMedia}
+                        onChange={(event) =>
+                          setGroupForm?.((prev) => ({
+                            ...prev,
+                            remoteChannelStreamMedia: event.target.checked,
+                          }))
+                        }
+                        className="h-4 w-4 rounded border-emerald-300 accent-emerald-500"
+                      />
+                    </label>
+                    {Object.keys(remoteQueue).length ? (
+                      <p className="text-xs text-slate-500 dark:text-slate-400">
+                        Queue: {Object.entries(remoteQueue).map(([key, value]) => `${key} ${value}`).join(" - ")}
+                      </p>
+                    ) : null}
+                  </div>
+                ) : null}
               </div>
             ) : null}
 
