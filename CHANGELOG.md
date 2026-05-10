@@ -10,10 +10,13 @@ All notable changes to BirdX are documented in this file.
 - Added database migration `028-call-logs` for call logs and call participants.
 - Added `GET /api/chats/:chatId/calls` for per-chat call history.
 - Added a Call history section to chat profiles.
+- Ported Songbird `v0.10.0` Remote Channel foundations with Telegram source settings for channels.
+- Added database migration `029-remote-channel-queue` for remote channel sources and queue state.
 
 ### Changed
 
 - Voice-call socket events now record started, accepted, rejected, ended, and disconnect-timeout call outcomes.
+- Adopted Songbird `v0.9.2`/`v0.10.0` compatibility updates for invite token generation and remote-channel message ownership.
 
 ## v2.4.2 - 2026-05-09
 
