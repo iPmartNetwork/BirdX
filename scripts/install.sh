@@ -2464,6 +2464,26 @@ run_db_command_logged_quiet() {
   run_logged_quiet run_as_root bash -lc "cd '$INSTALL_DIR' && ${escaped:1}"
 }
 
+ensure_remote_channel_dependencies() {
+  local resolve_telegram="require.resolve('telegram', { paths: [process.cwd() + '/server'] })"
+
+  if run_db_command node -e "$resolve_telegram" >/dev/null 2>&1; then
+    return 0
+  fi
+
+  warn "Remote Channel dependency 'telegram' is not installed. Installing server dependencies..."
+  if [[ -n "$MIRROR_NPM" ]]; then
+    run_db_command npm --prefix server --registry "$MIRROR_NPM" install
+  else
+    run_db_command npm --prefix server install
+  fi
+
+  if ! run_db_command node -e "$resolve_telegram" >/dev/null 2>&1; then
+    warn "Unable to load the 'telegram' package after npm install. Check npm output and network access."
+    return 1
+  fi
+}
+
 resolve_chat_visibility_for_script() {
   local chat_selector="$1"
   [[ -n "$chat_selector" ]] || return 1
@@ -2505,7 +2525,8 @@ Use these menu actions inside this installer script:
   17    Add members to a chat
   18    Edit a chat
   19    Edit a user
-  20    Configure Remote Channel Telegram login
+  20    Show this help
+  22    Configure Remote Channel Telegram login
 
 Notes:
   - "Ban/unban user" is a toggle and expires that user's sessions.
@@ -2864,6 +2885,11 @@ db_remote_configure() {
 
   if [[ ! -d "${INSTALL_DIR}/server" ]]; then
     warn "BirdX server directory not found at ${INSTALL_DIR}/server."
+    press_enter_to_continue
+    return 1
+  fi
+
+  if ! ensure_remote_channel_dependencies; then
     press_enter_to_continue
     return 1
   fi
