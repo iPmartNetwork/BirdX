@@ -39,6 +39,7 @@ import {
   deleteIdbCache,
   readIdbCache,
 } from "../../utils/chatCache.js";
+import { formatFullDate } from "../../utils/chatFormat.js";
 
 export default function ChatWindowPanel({
   mobileTab,
@@ -784,13 +785,7 @@ export default function ChatWindowPanel({
     if (msg?._dayLabel) return msg._dayLabel;
     if (msg?._dayKey) return msg._dayKey;
     if (!msg?.created_at) return "";
-    const date = new Date(msg.created_at);
-    if (Number.isNaN(date.getTime())) return "";
-    return date.toLocaleDateString(undefined, {
-      month: "short",
-      day: "numeric",
-      year: "numeric",
-    });
+    return formatFullDate(msg.created_at);
   }
 
   const handleGroupChipClick = (groupKeyOrIndex) => {
