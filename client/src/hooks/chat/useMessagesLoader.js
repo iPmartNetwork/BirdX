@@ -160,6 +160,70 @@ export function useMessagesLoader({
         null;
       const allowSystemEvents =
         String(chatType || "").toLowerCase() !== "channel";
+      const summaryChat =
+        chats.find((chat) => Number(chat.id) === Number(requestChatId)) ||
+        (Number(activeChat?.id || 0) === Number(requestChatId)
+          ? activeChat
+          : null);
+      const buildSummaryFallbackMessage = () => {
+        const body = normalizeMessageBody(summaryChat?.last_message).trim();
+        const messageId = Number(summaryChat?.last_message_id || 0);
+        if (!body || !messageId) return null;
+        const members = Array.isArray(summaryChat?.members)
+          ? summaryChat.members
+          : [];
+        const senderUsername = String(
+          summaryChat?.last_sender_username || "",
+        ).trim();
+        const sender = senderUsername
+          ? members.find(
+              (member) =>
+                String(member?.username || "").toLowerCase() ===
+                senderUsername.toLowerCase(),
+            )
+          : null;
+        const createdAt = summaryChat?.last_time || new Date().toISOString();
+        const senderId =
+          Number(summaryChat?.last_sender_id || sender?.id || 0) || null;
+        return {
+          id: messageId,
+          body,
+          edited: 0,
+          edited_body: null,
+          created_at: createdAt,
+          expiresAt: null,
+          files: Array.isArray(summaryChat?.last_message_files)
+            ? summaryChat.last_message_files
+            : [],
+          read_at: summaryChat?.last_message_read_at || null,
+          read_by_me:
+            senderId === Number(user.id || 0) ||
+            String(senderUsername || "").toLowerCase() ===
+              String(user.username || "").toLowerCase(),
+          read_by_user_id: summaryChat?.last_message_read_by_user_id || null,
+          user_id: senderId,
+          username: senderUsername || sender?.username || "",
+          nickname:
+            summaryChat?.last_sender_nickname ||
+            sender?.nickname ||
+            senderUsername ||
+            "",
+          avatar_url:
+            summaryChat?.last_sender_avatar_url || sender?.avatar_url || "",
+          color: sender?.color || summaryChat?.group_color || "#10b981",
+          replyTo: null,
+          reactions: [],
+          _readByMe:
+            senderId === Number(user.id || 0) ||
+            String(senderUsername || "").toLowerCase() ===
+              String(user.username || "").toLowerCase(),
+          _dayKey: formatDayKey(createdAt),
+          _dayLabel: formatDayLabel(createdAt),
+          _timeLabel: formatTime(createdAt),
+          _processingPending: false,
+          _systemEvent: null,
+        };
+      };
       const nextMessages = (data.messages || []).map((msg) => {
         const dayKey = formatDayKey(msg.created_at);
         const readByMe =
@@ -266,6 +330,12 @@ export function useMessagesLoader({
           },
         };
       });
+      if (!nextMessagesWithReplyIcons.length) {
+        const fallbackMessage = buildSummaryFallbackMessage();
+        if (fallbackMessage) {
+          nextMessagesWithReplyIcons.push(fallbackMessage);
+        }
+      }
       if (options.prepend) {
         setMessages((prev) => {
           if (activeChatIdRef.current !== requestChatId) return prev;
