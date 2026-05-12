@@ -5,8 +5,6 @@ import { argv, stdin as defaultInput, stdout as defaultOutput } from "node:proce
 import dotenv from "dotenv";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { Logger, TelegramClient } from "telegram";
-import { StringSession } from "telegram/sessions/index.js";
 import {
   getTelegramClientConnectionOptions,
   parseTelegramProxy,
@@ -20,6 +18,9 @@ const envExamplePath = path.join(projectRootDir, ".env.example");
 
 let envPath = defaultEnvPath;
 let rl = null;
+let Logger = null;
+let TelegramClient = null;
+let StringSession = null;
 
 function trim(value) {
   return String(value || "").trim();
@@ -371,6 +372,28 @@ async function resolveTwoStepPassword(options) {
   return ask("Two-step password, if enabled: ");
 }
 
+async function loadTelegramDependencies() {
+  try {
+    const [telegramModule, sessionModule] = await Promise.all([
+      import("telegram"),
+      import("telegram/sessions/index.js"),
+    ]);
+    Logger = telegramModule.Logger;
+    TelegramClient = telegramModule.TelegramClient;
+    StringSession = sessionModule.StringSession;
+  } catch (error) {
+    if (
+      error?.code === "ERR_MODULE_NOT_FOUND" &&
+      String(error?.message || "").includes("telegram")
+    ) {
+      throw new Error(
+        "Missing package 'telegram'. Run `npm --prefix server install` from the BirdX install directory, then try again.",
+      );
+    }
+    throw error;
+  }
+}
+
 let client = null;
 
 try {
@@ -383,6 +406,7 @@ try {
   envPath = options.envFile ? path.resolve(options.envFile) : defaultEnvPath;
   dotenv.config({ path: envPath, override: true });
   dotenv.config({ path: path.join(serverDir, ".env"), override: true });
+  await loadTelegramDependencies();
 
   console.log("BirdX Remote Channel configuration");
   console.log("Create Telegram credentials at https://my.telegram.org/apps first.\n");
