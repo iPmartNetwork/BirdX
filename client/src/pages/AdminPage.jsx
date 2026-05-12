@@ -15,6 +15,7 @@ import {
   fetchAdminChats,
   fetchAdminFiles,
   fetchAdminOverview,
+  fetchAdminRequiredChannels,
   fetchAdminSecuritySummary,
   fetchAdminSettings,
   fetchAdminSystemHealth,
@@ -24,6 +25,7 @@ import {
   resetAdminUserPassword,
   updateAdminChatMember,
   updateAdminChatSettings,
+  updateAdminRequiredChannels,
   updateAdminUser,
 } from "../api/chatApi.js";
 import {
@@ -179,10 +181,6 @@ function Pager({ pagination, onPage }) {
 function ActionModal({ action, onClose, onConfirm, busy }) {
   const [value, setValue] = useState("");
   const [adminPassword, setAdminPassword] = useState("");
-  useEffect(() => {
-    setValue("");
-    setAdminPassword("");
-  }, [action]);
   if (!action) return null;
   const needsInput = action.inputLabel;
   const needsAdminPassword = Boolean(action.requiresPassword);
@@ -347,20 +345,12 @@ function ChatDetailDrawer({
   onChangeMemberRole,
   onRemoveMember,
 }) {
-  const [visibility, setVisibility] = useState("public");
-  const [username, setUsername] = useState("");
-  const [allowInvites, setAllowInvites] = useState(true);
+  const initialChat = detail?.chat || {};
+  const [visibility, setVisibility] = useState(initialChat.group_visibility || "public");
+  const [username, setUsername] = useState(initialChat.group_username || "");
+  const [allowInvites, setAllowInvites] = useState(Boolean(initialChat.allow_member_invites));
   const [memberUsername, setMemberUsername] = useState("");
   const [memberRole, setMemberRole] = useState("admin");
-
-  useEffect(() => {
-    if (!detail?.chat) return;
-    setVisibility(detail.chat.group_visibility || "public");
-    setUsername(detail.chat.group_username || "");
-    setAllowInvites(Boolean(detail.chat.allow_member_invites));
-    setMemberUsername("");
-    setMemberRole("admin");
-  }, [detail]);
 
   if (!detail) return null;
   const chat = detail.chat || {};
@@ -467,6 +457,9 @@ export default function AdminPage({ user, isDark, onToggleTheme, onNavigate }) {
   const [files, setFiles] = useState([]);
   const [auditLogs, setAuditLogs] = useState([]);
   const [settings, setSettings] = useState(null);
+  const [requiredChannels, setRequiredChannels] = useState([]);
+  const [availableRequiredChannels, setAvailableRequiredChannels] = useState([]);
+  const [selectedRequiredChannelIds, setSelectedRequiredChannelIds] = useState([]);
   const [backups, setBackups] = useState([]);
   const [systemHealth, setSystemHealth] = useState(null);
   const [securitySummary, setSecuritySummary] = useState(null);
@@ -533,6 +526,18 @@ export default function AdminPage({ user, isDark, onToggleTheme, onNavigate }) {
     setSettings(data.settings || null);
   }, []);
 
+  const loadRequiredChannels = useCallback(async () => {
+    const data = await readJsonResponse(await fetchAdminRequiredChannels());
+    const required = Array.isArray(data.requiredChannels) ? data.requiredChannels : [];
+    setRequiredChannels(required);
+    setAvailableRequiredChannels(
+      Array.isArray(data.availableChannels) ? data.availableChannels : [],
+    );
+    setSelectedRequiredChannelIds(
+      required.map((channel) => Number(channel.chat_id || channel.id)).filter(Boolean),
+    );
+  }, []);
+
   const loadBackups = useCallback(async () => {
     const data = await readJsonResponse(await fetchAdminBackups());
     setBackups(Array.isArray(data.backups) ? data.backups : []);
@@ -551,6 +556,7 @@ export default function AdminPage({ user, isDark, onToggleTheme, onNavigate }) {
       ["files", loadFiles],
       ["audit", loadAudit],
       ["settings", loadSettings],
+      ["required channels", loadRequiredChannels],
       ["backups", loadBackups],
     ];
     const results = await Promise.allSettled(tasks.map(([, loader]) => loader()));
@@ -570,7 +576,7 @@ export default function AdminPage({ user, isDark, onToggleTheme, onNavigate }) {
       }
     }
     setLoading(false);
-  }, [isAdmin, loadAudit, loadBackups, loadChats, loadFiles, loadOverview, loadSecuritySummary, loadSettings, loadSystemHealth, loadUsers]);
+  }, [isAdmin, loadAudit, loadBackups, loadChats, loadFiles, loadOverview, loadRequiredChannels, loadSecuritySummary, loadSettings, loadSystemHealth, loadUsers]);
 
   useEffect(() => {
     void loadAll();
@@ -588,6 +594,12 @@ export default function AdminPage({ user, isDark, onToggleTheme, onNavigate }) {
   useEffect(() => {
     if (activeTab === "audit") void loadAudit().catch((err) => setError(err.message));
   }, [activeTab, loadAudit]);
+  useEffect(() => {
+    if (activeTab !== "maintenance") return;
+    void loadSettings().catch((err) => setError(err.message));
+    void loadRequiredChannels().catch((err) => setError(err.message));
+    void loadBackups().catch((err) => setError(err.message));
+  }, [activeTab, loadBackups, loadRequiredChannels, loadSettings]);
   useEffect(() => {
     if (activeTab !== "monitor") return undefined;
     void loadSystemHealth().catch((err) => setError(err.message));
@@ -654,6 +666,19 @@ export default function AdminPage({ user, isDark, onToggleTheme, onNavigate }) {
     () => Object.values(stats.chats || {}).reduce((sum, value) => sum + Number(value || 0), 0),
     [stats.chats],
   );
+  const selectedRequiredChannelSet = useMemo(
+    () => new Set(selectedRequiredChannelIds.map((id) => Number(id)).filter(Boolean)),
+    [selectedRequiredChannelIds],
+  );
+  const toggleRequiredChannel = (chatId) => {
+    const id = Number(chatId || 0);
+    if (!id) return;
+    setSelectedRequiredChannelIds((prev) =>
+      prev.map(Number).includes(id)
+        ? prev.filter((item) => Number(item) !== id)
+        : [...prev, id],
+    );
+  };
 
   if (!isAdmin) {
     return (
@@ -1084,8 +1109,86 @@ export default function AdminPage({ user, isDark, onToggleTheme, onNavigate }) {
                 <StatCard label="Account Creation" value={settings?.accountCreation ? "Enabled" : "Disabled"} detail="Controlled by .env" icon={Settings} />
                 <StatCard label="Message Limit" value={settings?.messageMaxChars || 0} detail="Maximum characters per message" icon={Database} />
                 <StatCard label="Storage Encryption" value={settings?.storageEncryption ? "Enabled" : "Disabled"} detail="Server-side storage encryption" icon={Lock} />
-                <StatCard label="Bootstrap Admins" value={settings?.adminUsernames?.length || 0} detail={(settings?.adminUsernames || []).join(", ") || "No env admins"} icon={ShieldCheck} />
+                <StatCard label="Required Channels" value={requiredChannels.length} detail="Auto-joined announcement channels" icon={Chat} />
               </div>
+              <section className="rounded-lg border border-slate-200 bg-white p-4 dark:border-white/10 dark:bg-slate-950">
+                <div className="flex flex-wrap items-center justify-between gap-3">
+                  <div>
+                    <h2 className="text-sm font-bold">Required channels</h2>
+                    <p className="text-xs text-slate-500 dark:text-slate-400">New accounts are added automatically and members cannot leave these channels.</p>
+                  </div>
+                  <div className="flex flex-wrap gap-2">
+                    <button
+                      type="button"
+                      onClick={() =>
+                        confirmAction({
+                          title: "Save required channels",
+                          body: "Update the required channel list for new accounts?",
+                          confirmLabel: "Save",
+                          requiresPassword: true,
+                          run: async ({ adminPassword }) => {
+                            await readJsonResponse(
+                              await updateAdminRequiredChannels({
+                                chatIds: selectedRequiredChannelIds,
+                                adminPassword,
+                              }),
+                            );
+                          },
+                          refresh: loadRequiredChannels,
+                        })
+                      }
+                      className="inline-flex h-10 items-center gap-2 rounded-lg bg-emerald-500 px-4 text-sm font-semibold text-white"
+                    >
+                      <Pencil size={16} />Save
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() =>
+                        confirmAction({
+                          title: "Save and apply required channels",
+                          body: "Save this required channel list and add all existing users to it?",
+                          confirmLabel: "Save & apply",
+                          requiresPassword: true,
+                          run: async ({ adminPassword }) => {
+                            await readJsonResponse(
+                              await updateAdminRequiredChannels({
+                                chatIds: selectedRequiredChannelIds,
+                                applyNow: true,
+                                adminPassword,
+                              }),
+                            );
+                          },
+                          refresh: loadRequiredChannels,
+                        })
+                      }
+                      className="inline-flex h-10 items-center gap-2 rounded-lg border border-slate-200 px-4 text-sm font-semibold text-slate-700 dark:border-white/10 dark:text-slate-200"
+                    >
+                      <UserPlus size={16} />Save & apply
+                    </button>
+                  </div>
+                </div>
+                <div className="mt-4 divide-y divide-slate-100 dark:divide-white/10">
+                  {availableRequiredChannels.length ? availableRequiredChannels.map((channel) => {
+                    const checked = selectedRequiredChannelSet.has(Number(channel.id));
+                    return (
+                      <label key={channel.id} className="flex cursor-pointer items-center justify-between gap-3 py-3 text-sm">
+                        <span className="min-w-0">
+                          <span className="block truncate font-semibold">{channel.name || `Channel #${channel.id}`}</span>
+                          <span className="block text-xs text-slate-500 dark:text-slate-400">
+                            {channel.group_username ? `@${String(channel.group_username).replace(/^@/, "")}` : "No public username"} / {channel.member_count || 0} members
+                          </span>
+                        </span>
+                        <input
+                          type="checkbox"
+                          checked={checked}
+                          onChange={() => toggleRequiredChannel(channel.id)}
+                          className="h-5 w-5 rounded border-slate-300 text-emerald-500 focus:ring-emerald-400"
+                        />
+                      </label>
+                    );
+                  }) : <p className="py-4 text-sm text-slate-500">Create a BirdX channel first, then select it here.</p>}
+                </div>
+              </section>
               <section className="rounded-lg border border-slate-200 bg-white p-4 dark:border-white/10 dark:bg-slate-950">
                 <div className="flex flex-wrap items-center justify-between gap-3">
                   <div><h2 className="text-sm font-bold">Database backups</h2><p className="text-xs text-slate-500 dark:text-slate-400">Create and download safe database snapshots.</p></div>
@@ -1109,6 +1212,7 @@ export default function AdminPage({ user, isDark, onToggleTheme, onNavigate }) {
       </main>
 
       <ActionModal
+        key={action?.title || "admin-action"}
         action={action}
         busy={Boolean(busyKey)}
         onClose={() => setAction(null)}
@@ -1156,6 +1260,11 @@ export default function AdminPage({ user, isDark, onToggleTheme, onNavigate }) {
         }
       />
       <ChatDetailDrawer
+        key={
+          chatDetail?.chat
+            ? `${chatDetail.chat.id}-${chatDetail.chat.group_visibility}-${chatDetail.chat.group_username}-${chatDetail.chat.allow_member_invites}`
+            : "chat-detail"
+        }
         detail={chatDetail}
         onClose={() => setChatDetail(null)}
         onSaveSettings={(payload) =>
