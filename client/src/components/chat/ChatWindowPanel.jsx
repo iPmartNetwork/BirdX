@@ -345,9 +345,82 @@ export default function ChatWindowPanel({
     updateFloatingDayFromScroll,
     handleFloatingChipClick,
   } = useFloatingDayChip();
+  const timelineMessages = useMemo(() => {
+    if (messages.length) return messages;
+    if (!activeChatId || !activeChat) return messages;
+    const chatType = String(activeChat?.type || "").toLowerCase();
+    if (chatType !== "group" && chatType !== "channel") return messages;
+    const body = String(activeChat?.last_message || "").trim();
+    const messageId = Number(activeChat?.last_message_id || 0);
+    if (!body || !messageId) return messages;
+
+    const senderUsername = String(activeChat?.last_sender_username || "").trim();
+    const members = Array.isArray(activeChat?.members) ? activeChat.members : [];
+    const sender = senderUsername
+      ? members.find(
+          (member) =>
+            String(member?.username || "").toLowerCase() ===
+            senderUsername.toLowerCase(),
+        )
+      : null;
+    const createdAt = activeChat?.last_time || new Date().toISOString();
+    const senderId =
+      Number(activeChat?.last_sender_id || sender?.id || 0) || null;
+    const isFromSelf =
+      senderId === Number(user?.id || 0) ||
+      String(senderUsername || "").toLowerCase() ===
+        String(user?.username || "").toLowerCase();
+
+    return [
+      {
+        id: messageId,
+        _serverId: messageId,
+        body,
+        edited: 0,
+        edited_body: null,
+        created_at: createdAt,
+        expiresAt: null,
+        files: Array.isArray(activeChat?.last_message_files)
+          ? activeChat.last_message_files
+          : [],
+        read_at: activeChat?.last_message_read_at || null,
+        read_by_user_id: activeChat?.last_message_read_by_user_id || null,
+        read_by_me: isFromSelf,
+        _readByMe: isFromSelf,
+        user_id: senderId,
+        username: senderUsername || sender?.username || "",
+        nickname:
+          activeChat?.last_sender_nickname ||
+          sender?.nickname ||
+          senderUsername ||
+          activeFallbackTitle ||
+          "",
+        avatar_url:
+          activeChat?.last_sender_avatar_url || sender?.avatar_url || "",
+        color: sender?.color || activeChat?.group_color || groupAvatarColor || "#10b981",
+        replyTo: null,
+        reactions: [],
+        seenCount: 1,
+        _dayKey: formatFullDate(createdAt),
+        _dayLabel: formatFullDate(createdAt),
+        _timeLabel: formatTime(createdAt),
+        _processingPending: false,
+        _systemEvent: null,
+      },
+    ];
+  }, [
+    activeChat,
+    activeChatId,
+    activeFallbackTitle,
+    formatTime,
+    groupAvatarColor,
+    messages,
+    user,
+  ]);
+
   const groupedMessages = useMemo(() => {
     const groups = [];
-    messages.forEach((msg) => {
+    timelineMessages.forEach((msg) => {
       const dayKey = msg?._dayKey || getMessageDayLabel(msg);
       const dayLabel = getMessageDayLabel(msg);
       const lastGroup = groups[groups.length - 1];
@@ -362,7 +435,7 @@ export default function ChatWindowPanel({
       }
     });
     return groups;
-  }, [messages]);
+  }, [timelineMessages]);
 
   const refreshTimelineScrollable = useCallback(() => {
     const scroller = chatScrollRef?.current;
@@ -389,7 +462,7 @@ export default function ChatWindowPanel({
 
 
   useEffect(() => {
-    const last = messages[messages.length - 1];
+    const last = timelineMessages[timelineMessages.length - 1];
     if (!last) {
       setFloatingDay({ key: "", label: "" });
       return;
@@ -399,7 +472,7 @@ export default function ChatWindowPanel({
     if (key && label) {
       setFloatingDay({ key, label });
     }
-  }, [messages, setFloatingDay]);
+  }, [timelineMessages, setFloatingDay]);
 
   const startReachedLockRef = useRef(false);
   const handlePanelScroll = useCallback(
@@ -510,7 +583,7 @@ export default function ChatWindowPanel({
     activeChatId,
     isAtBottomRef,
     pendingUploadFiles?.length,
-    messages.length,
+    timelineMessages.length,
     chatScrollRef,
     isSmoothScrollLocked,
     scrollToBottomImmediate,
@@ -624,7 +697,7 @@ export default function ChatWindowPanel({
     };
   }, [
     activeChatId,
-    messages.length,
+    timelineMessages.length,
     groupedMessages.length,
     pendingUploadFiles?.length,
     activeUploadProgress,
@@ -657,8 +730,10 @@ export default function ChatWindowPanel({
   useEffect(() => {
     if (isDesktop || !activeChatId) return;
     let firstVideoUrl = null;
-    for (let i = 0; i < messages.length; i += 1) {
-      const files = Array.isArray(messages[i]?.files) ? messages[i].files : [];
+    for (let i = 0; i < timelineMessages.length; i += 1) {
+      const files = Array.isArray(timelineMessages[i]?.files)
+        ? timelineMessages[i].files
+        : [];
       const videoFile = files.find(
         (file) => getFileRenderType(file) === "video" && file?.url,
       );
@@ -678,7 +753,7 @@ export default function ChatWindowPanel({
       warmupVideo.removeAttribute("src");
       warmupVideo.load();
     };
-  }, [isDesktop, activeChatId, messages, getFileRenderType]);
+  }, [isDesktop, activeChatId, timelineMessages, getFileRenderType]);
 
   useEffect(() => {
     if (!showUploadMenu) return;
@@ -1482,7 +1557,7 @@ export default function ChatWindowPanel({
           <MessageTimeline
             key={`timeline-${Number(activeChatId || 0)}`}
             loadingMessages={loadingMessages}
-            messages={messages}
+            messages={timelineMessages}
             groupedMessages={groupedMessages}
             loadingOlderMessages={loadingOlderMessages}
             handleGroupChipClick={handleGroupChipClick}
