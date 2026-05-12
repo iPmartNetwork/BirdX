@@ -348,8 +348,6 @@ export default function ChatWindowPanel({
   const timelineMessages = useMemo(() => {
     if (messages.length) return messages;
     if (!activeChatId || !activeChat) return messages;
-    const chatType = String(activeChat?.type || "").toLowerCase();
-    if (chatType !== "group" && chatType !== "channel") return messages;
     const body = String(activeChat?.last_message || "").trim();
     const messageId = Number(activeChat?.last_message_id || 0);
     if (!body || !messageId) return messages;
