@@ -8,6 +8,7 @@ function registerAuthRoutes(app, deps) {
     ADMIN_USERNAMES = [],
     adminRun,
     adminSave,
+    applyRequiredChannelsToUser,
     bcrypt,
     clearSessionCookie,
     createSession,
@@ -125,6 +126,7 @@ function registerAuthRoutes(app, deps) {
     const token = crypto.randomBytes(24).toString("hex");
 
     createSession(id, token, getSessionMetadata(req));
+    const requiredChannelMemberships = applyRequiredChannelsToUser?.(id) || 0;
     setSessionCookie(req, res, token);
 
     return res.json({
@@ -136,6 +138,7 @@ function registerAuthRoutes(app, deps) {
       status: "online",
       role: "user",
       isAdmin: ADMIN_USERNAMES.includes(trimmed),
+      requiredChannelMemberships,
     });
   });
 
