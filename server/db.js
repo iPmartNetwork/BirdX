@@ -383,6 +383,168 @@ export function addChatMember(chatId, userId, role = "member") {
   );
 }
 
+export function listRequiredChannels() {
+  return getAll(
+    `SELECT
+       required_channels.chat_id,
+       required_channels.enabled,
+       required_channels.created_at,
+       required_channels.updated_at,
+       chats.id,
+       chats.name,
+       chats.group_username,
+       chats.group_visibility,
+       chats.group_color,
+       chats.group_avatar_url,
+       (SELECT COUNT(*) FROM chat_members WHERE chat_id = chats.id) AS member_count
+     FROM required_channels
+     JOIN chats ON chats.id = required_channels.chat_id
+     WHERE chats.type = 'channel'
+     ORDER BY chats.name COLLATE NOCASE ASC, chats.id ASC`,
+  ).map((row) => ({
+    ...row,
+    enabled: Boolean(Number(row.enabled || 0)),
+    member_count: Number(row.member_count || 0),
+  }));
+}
+
+export function listRequiredChannelIds() {
+  return getAll(
+    `SELECT required_channels.chat_id
+     FROM required_channels
+     JOIN chats ON chats.id = required_channels.chat_id
+     WHERE required_channels.enabled = 1
+       AND chats.type = 'channel'`,
+  )
+    .map((row) => Number(row.chat_id || 0))
+    .filter(Boolean);
+}
+
+export function isRequiredChannel(chatId) {
+  const row = getRow(
+    `SELECT 1 AS required
+     FROM required_channels
+     JOIN chats ON chats.id = required_channels.chat_id
+     WHERE required_channels.chat_id = ?
+       AND required_channels.enabled = 1
+       AND chats.type = 'channel'`,
+    [Number(chatId || 0)],
+  );
+  return Boolean(row?.required);
+}
+
+export function listAvailableRequiredChannels() {
+  return getAll(
+    `SELECT
+       chats.id,
+       chats.name,
+       chats.group_username,
+       chats.group_visibility,
+       chats.group_color,
+       chats.group_avatar_url,
+       COALESCE(required_channels.enabled, 0) AS required,
+       (SELECT COUNT(*) FROM chat_members WHERE chat_id = chats.id) AS member_count
+     FROM chats
+     LEFT JOIN required_channels ON required_channels.chat_id = chats.id
+     WHERE chats.type = 'channel'
+     ORDER BY chats.name COLLATE NOCASE ASC, chats.id ASC`,
+  ).map((row) => ({
+    ...row,
+    required: Boolean(Number(row.required || 0)),
+    member_count: Number(row.member_count || 0),
+  }));
+}
+
+export function setRequiredChannels(chatIds = []) {
+  const normalizedIds = Array.from(
+    new Set(
+      (Array.isArray(chatIds) ? chatIds : [])
+        .map((id) => Number(id))
+        .filter((id) => Number.isFinite(id) && id > 0),
+    ),
+  );
+  const validIds = normalizedIds.length
+    ? getAll(
+        `SELECT id FROM chats WHERE type = 'channel' AND id IN (${normalizedIds
+          .map(() => "?")
+          .join(", ")})`,
+        normalizedIds,
+      ).map((row) => Number(row.id))
+    : [];
+
+  const savepoint = `sp_required_channels_${Date.now()}`;
+  runWithoutSave(`SAVEPOINT ${savepoint}`);
+  try {
+    runWithoutSave("DELETE FROM required_channels");
+    validIds.forEach((chatId) => {
+      runWithoutSave(
+        `INSERT INTO required_channels (chat_id, enabled, created_at, updated_at)
+         VALUES (?, 1, datetime('now'), datetime('now'))`,
+        [chatId],
+      );
+    });
+    runWithoutSave(`RELEASE ${savepoint}`);
+    saveDatabase();
+  } catch (error) {
+    try {
+      runWithoutSave(`ROLLBACK TO ${savepoint}`);
+      runWithoutSave(`RELEASE ${savepoint}`);
+    } catch {
+      // ignore rollback failures
+    }
+    throw error;
+  }
+
+  return validIds;
+}
+
+export function applyRequiredChannelsToUser(userId) {
+  const targetUserId = Number(userId || 0);
+  if (!targetUserId) return 0;
+
+  const channelIds = listRequiredChannelIds();
+  let added = 0;
+  channelIds.forEach((chatId) => {
+    const before = getRow(
+      "SELECT 1 AS member FROM chat_members WHERE chat_id = ? AND user_id = ?",
+      [chatId, targetUserId],
+    );
+    run(
+      "INSERT OR IGNORE INTO chat_members (chat_id, user_id, role) VALUES (?, ?, 'member')",
+      [chatId, targetUserId],
+    );
+    run("DELETE FROM chat_left_members WHERE chat_id = ? AND user_id = ?", [
+      chatId,
+      targetUserId,
+    ]);
+    run("DELETE FROM hidden_chats WHERE chat_id = ? AND user_id = ?", [
+      chatId,
+      targetUserId,
+    ]);
+    run("DELETE FROM group_removed_members WHERE chat_id = ? AND user_id = ?", [
+      chatId,
+      targetUserId,
+    ]);
+    if (!before?.member) added += 1;
+  });
+  return added;
+}
+
+export function applyRequiredChannelsToAllUsers() {
+  const users = getAll("SELECT id FROM users ORDER BY id ASC")
+    .map((row) => Number(row.id || 0))
+    .filter(Boolean);
+  let membershipsAdded = 0;
+  users.forEach((userId) => {
+    membershipsAdded += applyRequiredChannelsToUser(userId);
+  });
+  return {
+    usersProcessed: users.length,
+    membershipsAdded,
+    requiredChannels: listRequiredChannelIds().length,
+  };
+}
+
 export function searchPublicGroups(query, viewerUserId, limit = 20) {
   const like = `%${String(query || "").trim()}%`;
   const safeLimit = Math.max(1, Math.min(100, Number(limit) || 20));
@@ -1215,13 +1377,16 @@ export function deleteChatById(chatId) {
     );
     runWithoutSave("DELETE FROM chat_messages WHERE chat_id = ?", [targetChatId]);
     runWithoutSave("DELETE FROM chat_members WHERE chat_id = ?", [targetChatId]);
-    runWithoutSave("DELETE FROM hidden_chats WHERE chat_id = ?", [targetChatId]);
-    runWithoutSave("DELETE FROM chat_mutes WHERE chat_id = ?", [targetChatId]);
-    runWithoutSave("DELETE FROM chat_left_members WHERE chat_id = ?", [targetChatId]);
-    runWithoutSave("DELETE FROM group_removed_members WHERE chat_id = ?", [targetChatId]);
-    runWithoutSave(
-      `DELETE FROM remote_channel_queue
-       WHERE source_id IN (
+      runWithoutSave("DELETE FROM hidden_chats WHERE chat_id = ?", [targetChatId]);
+      runWithoutSave("DELETE FROM chat_mutes WHERE chat_id = ?", [targetChatId]);
+      runWithoutSave("DELETE FROM chat_left_members WHERE chat_id = ?", [targetChatId]);
+      runWithoutSave("DELETE FROM group_removed_members WHERE chat_id = ?", [targetChatId]);
+      runWithoutSave("DELETE FROM required_channels WHERE chat_id = ?", [
+        targetChatId,
+      ]);
+      runWithoutSave(
+        `DELETE FROM remote_channel_queue
+         WHERE source_id IN (
          SELECT id FROM remote_channel_sources WHERE chat_id = ?
        )`,
       [targetChatId],
