@@ -80,6 +80,18 @@ export function useMessagesLoader({
   async function loadMessages(chatId, options = {}) {
     const requestChatId = Number(chatId);
     const isSilentRefresh = Boolean(options.silent);
+    if (
+      messageFetchInFlightRef.current &&
+      isSilentRefresh &&
+      options.preserveHistory &&
+      !options.prepend
+    ) {
+      queuedSilentMessageRefreshRef.current = {
+        chatId: requestChatId,
+        options: { ...options, silent: true, preserveHistory: true },
+      };
+      return;
+    }
     if (isSilentRefresh) {
       const now = Date.now();
       const lastAt = Number(lastSilentFetchByChatRef.current.get(requestChatId) || 0);
@@ -101,18 +113,6 @@ export function useMessagesLoader({
     messageFetchAbortRef.current = controller;
     if (!options.silent) {
       setLoadingMessages(true);
-    }
-    if (
-      messageFetchInFlightRef.current &&
-      options.silent &&
-      options.preserveHistory &&
-      !options.prepend
-    ) {
-      queuedSilentMessageRefreshRef.current = {
-        chatId: Number(chatId),
-        options: { ...options, silent: true, preserveHistory: true },
-      };
-      return;
     }
     messageFetchInFlightRef.current = true;
     try {
