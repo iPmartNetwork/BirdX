@@ -23,6 +23,7 @@ import { resolveReplyPreview, summarizeFiles, truncateText } from "../utils/mess
 import {
   formatBytesAsMb,
   formatChatCardTimestamp,
+  formatDayKey,
   formatDayLabel,
   formatTime,
   parseServerDate,
@@ -2481,12 +2482,75 @@ useEffect(() => {
       let cached = readMessagesCacheMemory(messagesCacheRef.current, openedChatId) || null;
       // IDB async load below will hydrate if needed.
       const hasCachedMessages = Array.isArray(cached?.messages) && cached.messages.length > 0;
+      const fallbackLastMessage = (() => {
+        if (hasCachedMessages || !openedChat) return null;
+        const body = normalizeMessageBody(openedChat?.last_message).trim();
+        const messageId = Number(openedChat?.last_message_id || 0);
+        if (!body || !messageId) return null;
+        const members = Array.isArray(openedChat?.members) ? openedChat.members : [];
+        const senderUsername = String(openedChat?.last_sender_username || "").trim();
+        const sender = senderUsername
+          ? members.find(
+              (member) =>
+                String(member?.username || "").toLowerCase() ===
+                senderUsername.toLowerCase(),
+            )
+          : null;
+        const createdAt = openedChat?.last_time || new Date().toISOString();
+        const senderId =
+          Number(openedChat?.last_sender_id || sender?.id || 0) || null;
+        const isFromSelf =
+          senderId === Number(user.id || 0) ||
+          String(senderUsername || "").toLowerCase() ===
+            String(user.username || "").toLowerCase();
+        return {
+          id: messageId,
+          _serverId: messageId,
+          body,
+          edited: 0,
+          edited_body: null,
+          created_at: createdAt,
+          expiresAt: null,
+          files: Array.isArray(openedChat?.last_message_files)
+            ? openedChat.last_message_files
+            : [],
+          read_at: openedChat?.last_message_read_at || null,
+          read_by_user_id: openedChat?.last_message_read_by_user_id || null,
+          read_by_me: isFromSelf,
+          _readByMe: isFromSelf,
+          user_id: senderId,
+          username: senderUsername || sender?.username || "",
+          nickname:
+            openedChat?.last_sender_nickname ||
+            sender?.nickname ||
+            senderUsername ||
+            openedChat?.name ||
+            "",
+          avatar_url:
+            openedChat?.last_sender_avatar_url || sender?.avatar_url || "",
+          color: sender?.color || openedChat?.group_color || "#10b981",
+          replyTo: null,
+          reactions: [],
+          seenCount: 1,
+          _dayKey: formatDayKey(createdAt),
+          _dayLabel: formatDayLabel(createdAt),
+          _timeLabel: formatTime(createdAt),
+          _processingPending: false,
+          _systemEvent: null,
+        };
+      })();
       openingHadUnreadRef.current = Boolean((openedChat?.unread_count || 0) > 0);
       openingUnreadCountRef.current = Number(openedChat?.unread_count || 0);
       isAtBottomRef.current = true;
       setIsAtBottom(true);
       setLoadingMessages(!hasCachedMessages);
-      setMessages(hasCachedMessages ? normalizeMessagesForRender(cached.messages) : []);
+      setMessages(
+        hasCachedMessages
+          ? normalizeMessagesForRender(cached.messages)
+          : fallbackLastMessage
+            ? [fallbackLastMessage]
+            : [],
+      );
       setHasOlderMessages(Boolean(cached?.hasOlderMessages));
       setLoadingOlderMessages(false);
       lastMessageIdRef.current = Number(cached?.lastMessageId || 0) || null;
@@ -2717,6 +2781,7 @@ useEffect(() => {
     unreadAnchorLockUntilRef,
     shouldAutoMarkReadRef,
     allowStartReachedRef,
+    formatDayKey,
     formatDayLabel,
     formatTime,
     parseServerDate,
@@ -4328,8 +4393,7 @@ const peerStatusLabel = !activeHeaderPeer || activeHeaderPeer?.isDeleted
             );
           }
           const createdAt = pendingMessage?._createdAt || new Date().toISOString();
-          const pendingDate = parseServerDate(createdAt);
-          const pendingDayKey = `${pendingDate.getFullYear()}-${pendingDate.getMonth()}-${pendingDate.getDate()}`;
+          const pendingDayKey = formatDayKey(createdAt);
           const pendingBody = String(pendingMessage?.body || "").trim();
           const messageFiles = files.map((file) => ({
             id: file.id,
@@ -5280,8 +5344,7 @@ const peerStatusLabel = !activeHeaderPeer || activeHeaderPeer?.isDeleted
     const tempId = `pending-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
     const createdAt = new Date().toISOString();
     const queuedAt = Date.now();
-    const pendingDate = parseServerDate(createdAt);
-    const pendingDayKey = `${pendingDate.getFullYear()}-${pendingDate.getMonth()}-${pendingDate.getDate()}`;
+    const pendingDayKey = formatDayKey(createdAt);
     const pendingFiles = hasAnyPendingFiles
       ? [
           ...pendingUploadFiles.map((item) => {
