@@ -1217,6 +1217,11 @@ write_env_from_example() {
   local existing_voice_waveform_max_decode_bytes
   local existing_voice_waveform_max_decode_seconds
   local existing_storage_encryption_key
+  local existing_remote_channel
+  local existing_remote_channel_api_id
+  local existing_remote_channel_api_hash
+  local existing_remote_channel_session_string
+  local existing_remote_channel_proxy_url
   existing_public_key="$(get_existing_env_value "VAPID_PUBLIC_KEY" "")"
   existing_private_key="$(get_existing_env_value "VAPID_PRIVATE_KEY" "")"
   existing_subject="$(get_existing_env_value "VAPID_SUBJECT" "mailto:admin@example.com")"
@@ -1225,6 +1230,11 @@ write_env_from_example() {
   existing_voice_waveform_max_decode_bytes="$(get_existing_env_value "CHAT_VOICE_WAVEFORM_MAX_DECODE_BYTES" "$DEFAULT_CHAT_VOICE_WAVEFORM_MAX_DECODE_BYTES")"
   existing_voice_waveform_max_decode_seconds="$(get_existing_env_value "CHAT_VOICE_WAVEFORM_MAX_DECODE_SECONDS" "$DEFAULT_CHAT_VOICE_WAVEFORM_MAX_DECODE_SECONDS")"
   existing_storage_encryption_key="$(get_existing_env_value "STORAGE_ENCRYPTION_KEY" "")"
+  existing_remote_channel="$(get_existing_env_value "REMOTE_CHANNEL" "false")"
+  existing_remote_channel_api_id="$(get_existing_env_value "REMOTE_CHANNEL_TELEGRAM_API_ID" "0")"
+  existing_remote_channel_api_hash="$(get_existing_env_value "REMOTE_CHANNEL_TELEGRAM_API_HASH" "")"
+  existing_remote_channel_session_string="$(get_existing_env_value "REMOTE_CHANNEL_TELEGRAM_SESSION_STRING" "")"
+  existing_remote_channel_proxy_url="$(get_existing_env_value "REMOTE_CHANNEL_PROXY_URL" "")"
 
   run_silent run_as_root cp "$example_file" "$env_file"
   replace_env_value "$env_file" "SERVER_PORT" "$existing_server_port"
@@ -1236,6 +1246,16 @@ write_env_from_example() {
   replace_env_value "$env_file" "FILE_UPLOAD_MAX_TOTAL_SIZE" "$MAX_UPLOAD"
   replace_env_value "$env_file" "MESSAGE_FILE_RETENTION" "$RETENTION_DAYS"
   replace_env_value "$env_file" "MESSAGE_TEXT_RETENTION" "$TEXT_RETENTION_DAYS"
+  replace_env_value "$env_file" "REMOTE_CHANNEL" "$existing_remote_channel"
+  replace_env_value "$env_file" "REMOTE_CHANNEL_TELEGRAM_API_ID" "$existing_remote_channel_api_id"
+  replace_env_value "$env_file" "REMOTE_CHANNEL_TELEGRAM_API_HASH" "$existing_remote_channel_api_hash"
+  replace_env_value "$env_file" "REMOTE_CHANNEL_TELEGRAM_SESSION_STRING" "$existing_remote_channel_session_string"
+  replace_env_value "$env_file" "REMOTE_CHANNEL_PROXY_URL" "$existing_remote_channel_proxy_url"
+  replace_env_value "$env_file" "REMOTE_CHANNEL_POLL_INTERVAL_MS" "$(get_existing_env_value "REMOTE_CHANNEL_POLL_INTERVAL_MS" "5000")"
+  replace_env_value "$env_file" "REMOTE_CHANNEL_TELEGRAM_POLL_LIMIT" "$(get_existing_env_value "REMOTE_CHANNEL_TELEGRAM_POLL_LIMIT" "50")"
+  replace_env_value "$env_file" "REMOTE_CHANNEL_QUEUE_INTERVAL_MS" "$(get_existing_env_value "REMOTE_CHANNEL_QUEUE_INTERVAL_MS" "1000")"
+  replace_env_value "$env_file" "REMOTE_CHANNEL_QUEUE_MAX_ATTEMPTS" "$(get_existing_env_value "REMOTE_CHANNEL_QUEUE_MAX_ATTEMPTS" "10")"
+  replace_env_value "$env_file" "REMOTE_CHANNEL_QUEUE_STALE_LOCK_MS" "$(get_existing_env_value "REMOTE_CHANNEL_QUEUE_STALE_LOCK_MS" "300000")"
   replace_env_value "$env_file" "CHAT_VOICE_WAVEFORM_MAX_DECODE_BYTES" "$existing_voice_waveform_max_decode_bytes"
   replace_env_value "$env_file" "CHAT_VOICE_WAVEFORM_MAX_DECODE_SECONDS" "$existing_voice_waveform_max_decode_seconds"
   replace_env_value "$env_file" "STORAGE_ENCRYPTION_KEY" "$existing_storage_encryption_key"
@@ -1256,10 +1276,20 @@ write_env_fallback() {
   local existing_public_key
   local existing_private_key
   local existing_subject
+  local existing_remote_channel
+  local existing_remote_channel_api_id
+  local existing_remote_channel_api_hash
+  local existing_remote_channel_session_string
+  local existing_remote_channel_proxy_url
   existing_storage_encryption_key="$(get_existing_env_value "STORAGE_ENCRYPTION_KEY" "")"
   existing_public_key="$(get_existing_env_value "VAPID_PUBLIC_KEY" "")"
   existing_private_key="$(get_existing_env_value "VAPID_PRIVATE_KEY" "")"
   existing_subject="$(get_existing_env_value "VAPID_SUBJECT" "mailto:admin@example.com")"
+  existing_remote_channel="$(get_existing_env_value "REMOTE_CHANNEL" "false")"
+  existing_remote_channel_api_id="$(get_existing_env_value "REMOTE_CHANNEL_TELEGRAM_API_ID" "0")"
+  existing_remote_channel_api_hash="$(get_existing_env_value "REMOTE_CHANNEL_TELEGRAM_API_HASH" "")"
+  existing_remote_channel_session_string="$(get_existing_env_value "REMOTE_CHANNEL_TELEGRAM_SESSION_STRING" "")"
+  existing_remote_channel_proxy_url="$(get_existing_env_value "REMOTE_CHANNEL_PROXY_URL" "")"
   run_silent run_as_root bash -lc "cat > '$env_file' <<'EOF'
 SERVER_PORT=${SERVER_PORT}
 CLIENT_PORT=${CLIENT_PORT}
@@ -1274,6 +1304,16 @@ FILE_UPLOAD_TRANSCODE_VIDEOS=true
 MESSAGE_FILE_RETENTION=${RETENTION_DAYS}
 MESSAGE_TEXT_RETENTION=${TEXT_RETENTION_DAYS}
 MESSAGE_MAX_CHARS=4000
+REMOTE_CHANNEL=${existing_remote_channel}
+REMOTE_CHANNEL_TELEGRAM_API_ID=${existing_remote_channel_api_id}
+REMOTE_CHANNEL_TELEGRAM_API_HASH=${existing_remote_channel_api_hash}
+REMOTE_CHANNEL_TELEGRAM_SESSION_STRING=${existing_remote_channel_session_string}
+REMOTE_CHANNEL_PROXY_URL=${existing_remote_channel_proxy_url}
+REMOTE_CHANNEL_POLL_INTERVAL_MS=5000
+REMOTE_CHANNEL_TELEGRAM_POLL_LIMIT=50
+REMOTE_CHANNEL_QUEUE_INTERVAL_MS=1000
+REMOTE_CHANNEL_QUEUE_MAX_ATTEMPTS=10
+REMOTE_CHANNEL_QUEUE_STALE_LOCK_MS=300000
 CHAT_PENDING_TEXT_TIMEOUT=300000
 CHAT_PENDING_FILE_TIMEOUT=1200000
 CHAT_PENDING_RETRY_INTERVAL=4000
@@ -2404,6 +2444,16 @@ run_db_command() {
   run_as_root bash -lc "cd '$INSTALL_DIR' && ${escaped:1}"
 }
 
+run_db_command_interactive() {
+  local args=("$@")
+  local escaped=""
+  local part=""
+  for part in "${args[@]}"; do
+    escaped+=" $(printf '%q' "$part")"
+  done
+  run_as_root bash -lc "cd '$INSTALL_DIR' && ${escaped:1} </dev/tty >/dev/tty 2>&1"
+}
+
 run_db_command_logged_quiet() {
   local args=("$@")
   local escaped=""
@@ -2455,9 +2505,11 @@ Use these menu actions inside this installer script:
   17    Add members to a chat
   18    Edit a chat
   19    Edit a user
+  20    Configure Remote Channel Telegram login
 
 Notes:
   - "Ban/unban user" is a toggle and expires that user's sessions.
+  - Remote Channel mirrors Telegram channel posts into BirdX channels.
   - Public chats always allow member invites. Invite settings only apply to private chats.
   - Backups are encrypted zip files containing .env and data/.
 EOF
@@ -2798,6 +2850,95 @@ db_user_ban() {
   press_enter_to_continue
 }
 
+db_remote_configure() {
+  local current_api_id=""
+  local current_api_hash=""
+  local current_proxy_url=""
+  local api_id=""
+  local api_hash=""
+  local proxy_url=""
+  local phone_number=""
+  local two_step_password=""
+  local force_sms="no"
+  local args=()
+
+  if [[ ! -d "${INSTALL_DIR}/server" ]]; then
+    warn "BirdX server directory not found at ${INSTALL_DIR}/server."
+    press_enter_to_continue
+    return 1
+  fi
+
+  current_api_id="$(strip_surrounding_quotes "$(get_existing_env_value "REMOTE_CHANNEL_TELEGRAM_API_ID" "")")"
+  current_api_hash="$(strip_surrounding_quotes "$(get_existing_env_value "REMOTE_CHANNEL_TELEGRAM_API_HASH" "")")"
+  current_proxy_url="$(strip_surrounding_quotes "$(get_existing_env_value "REMOTE_CHANNEL_PROXY_URL" "")")"
+  [[ "$current_api_id" == "0" ]] && current_api_id=""
+
+  while true; do
+    if [[ -n "$current_api_id" ]]; then
+      prompt_read "Telegram API ID (default: ${current_api_id}): " api_id
+      [[ -z "$api_id" ]] && api_id="$current_api_id"
+    else
+      prompt_read "Telegram API ID: " api_id
+    fi
+    api_id="${api_id#"${api_id%%[![:space:]]*}"}"
+    api_id="${api_id%"${api_id##*[![:space:]]}"}"
+    if [[ "$api_id" =~ ^[0-9]+$ && "$api_id" -gt 0 ]]; then
+      break
+    fi
+    printf "Please enter a positive numeric Telegram API ID.\n"
+  done
+
+  if [[ -n "$current_api_hash" ]]; then
+    api_hash="$(prompt_secret_optional "Telegram API hash (leave blank to keep existing)")"
+    [[ -z "$api_hash" ]] && api_hash="$current_api_hash"
+  else
+    api_hash="$(prompt_secret "Telegram API hash")"
+  fi
+
+  if [[ -n "$current_proxy_url" ]]; then
+    prompt_read "Telegram proxy URL (optional; default: ${current_proxy_url}; type none to clear): " proxy_url
+    [[ -z "$proxy_url" ]] && proxy_url="$current_proxy_url"
+  else
+    prompt_read "Telegram proxy URL (optional): " proxy_url
+  fi
+  proxy_url="${proxy_url#"${proxy_url%%[![:space:]]*}"}"
+  proxy_url="${proxy_url%"${proxy_url##*[![:space:]]}"}"
+  if [[ "${proxy_url,,}" == "none" || "${proxy_url,,}" == "no" || "${proxy_url,,}" == "direct" ]]; then
+    proxy_url=""
+  fi
+
+  phone_number="$(prompt_non_empty "Telegram phone number (with country code)")"
+  two_step_password="$(prompt_secret_optional "Telegram two-step password (leave blank if disabled)")"
+  force_sms="$(prompt_yes_no "Force SMS delivery for the login code?" "no")"
+
+  printf "\nTelegram will send a login code now. Enter that code when the helper asks for it.\n"
+  args=(
+    node server/scripts/configure-remote-channel.js
+    --env-file "${INSTALL_DIR}/.env"
+    --api-id "$api_id"
+    --api-hash "$api_hash"
+    --phone-number "$phone_number"
+  )
+  if [[ -n "$proxy_url" ]]; then
+    args+=(--proxy-url "$proxy_url")
+  else
+    args+=(--no-proxy)
+  fi
+  if [[ -n "$two_step_password" ]]; then
+    args+=(--password "$two_step_password")
+  fi
+  if [[ "$force_sms" == "yes" ]]; then
+    args+=(--force-sms)
+  fi
+
+  if ! run_db_command_interactive "${args[@]}"; then
+    press_enter_to_continue
+    return 1
+  fi
+
+  press_enter_to_continue
+}
+
 db_restore_backup() {
   local resolved=""
   resolved="$(select_backup_zip_path)"
@@ -2840,7 +2981,8 @@ show_db_menu() {
     printf "20) ❔  Show help\n"
     printf "21) ↩️  Go back\n\n"
 
-    prompt_read "Choose an option [1-21]: " choice
+    printf "22) Remote Channel: configure Telegram login\n"
+    prompt_read "Choose an option [1-22]: " choice
     case "$choice" in
       1) db_inspect "all" ;;
       2) db_inspect "chat" ;;
@@ -2863,7 +3005,8 @@ show_db_menu() {
       19) db_user_edit ;;
       20) db_help ;;
       21) return ;;
-      *) printf "Invalid choice. Select a number from 1 to 21.\n" ;;
+      22) db_remote_configure ;;
+      *) printf "Invalid choice. Select a number from 1 to 22.\n" ;;
     esac
   done
 }
