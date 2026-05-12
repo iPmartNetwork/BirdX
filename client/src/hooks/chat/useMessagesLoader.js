@@ -30,6 +30,7 @@ export function useMessagesLoader({
   unreadAnchorLockUntilRef,
   shouldAutoMarkReadRef,
   allowStartReachedRef,
+  formatDayKey,
   formatDayLabel,
   formatTime,
   parseServerDate,
@@ -160,8 +161,7 @@ export function useMessagesLoader({
       const allowSystemEvents =
         String(chatType || "").toLowerCase() !== "channel";
       const nextMessages = (data.messages || []).map((msg) => {
-        const date = parseServerDate(msg.created_at);
-        const dayKey = `${date.getFullYear()}-${date.getMonth()}-${date.getDate()}`;
+        const dayKey = formatDayKey(msg.created_at);
         const readByMe =
           Number(msg?.user_id || 0) === Number(user.id) ||
           Boolean(msg.read_by_me);
