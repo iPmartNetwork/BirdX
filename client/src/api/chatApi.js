@@ -155,6 +155,15 @@ export const fetchAdminAuditLogs = (params = {}) =>
 
 export const fetchAdminSettings = () => apiFetch(`${API_BASE}/api/admin/settings`);
 
+export const fetchAdminRequiredChannels = () =>
+  apiFetch(`${API_BASE}/api/admin/required-channels`);
+
+export const updateAdminRequiredChannels = (payload = {}) =>
+  apiFetch(`${API_BASE}/api/admin/required-channels`, adminJsonOptions("PUT", payload));
+
+export const applyAdminRequiredChannels = (payload = {}) =>
+  apiFetch(`${API_BASE}/api/admin/required-channels/apply`, adminJsonOptions("POST", payload));
+
 export const fetchAdminBackups = () => apiFetch(`${API_BASE}/api/admin/backups`);
 
 export const createAdminBackup = (payload = {}) =>
