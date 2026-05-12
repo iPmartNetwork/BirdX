@@ -21,6 +21,10 @@ let rl = null;
 let Logger = null;
 let TelegramClient = null;
 let StringSession = null;
+const LOGIN_TIMEOUT_MS = Math.max(
+  30000,
+  Number(process.env.REMOTE_CHANNEL_LOGIN_TIMEOUT_MS || 5 * 60 * 1000),
+);
 
 function trim(value) {
   return String(value || "").trim();
@@ -279,6 +283,12 @@ async function promptProxyUrl(currentValue) {
     if (/^(none|no|direct)$/i.test(value)) value = "";
     if (!value) return "";
 
+    const proxyValidationError = getProxyUrlValidationError(value);
+    if (proxyValidationError) {
+      console.log(proxyValidationError);
+      continue;
+    }
+
     const messages = [];
     if (parseTelegramProxy(value, (message) => messages.push(message))) return value;
     console.log(
@@ -296,6 +306,18 @@ async function promptRequiredLoginValue(label) {
   }
 }
 
+function getProxyUrlValidationError(value) {
+  const proxyUrl = trim(value);
+  if (!proxyUrl) return "";
+  const authority = proxyUrl
+    .replace(/^[a-z][a-z0-9+.-]*:\/\//i, "")
+    .split(/[/?#]/, 1)[0];
+  if ((authority.match(/@/g) || []).length > 1) {
+    return "Proxy credentials contain multiple @ characters. Use socks5://user:pass@host:port, or encode @ as %40.";
+  }
+  return "";
+}
+
 function validateApiId(value) {
   const apiId = Number(value);
   if (Number.isInteger(apiId) && apiId > 0) return apiId;
@@ -305,6 +327,8 @@ function validateApiId(value) {
 function validateProxyUrl(value) {
   const proxyUrl = trim(value);
   if (!proxyUrl) return "";
+  const proxyValidationError = getProxyUrlValidationError(proxyUrl);
+  if (proxyValidationError) throw new Error(proxyValidationError);
   const messages = [];
   if (parseTelegramProxy(proxyUrl, (message) => messages.push(message))) return proxyUrl;
   throw new Error(
@@ -394,9 +418,22 @@ async function loadTelegramDependencies() {
   }
 }
 
+function withTimeout(promise, timeoutMs, message) {
+  let timer = null;
+  return Promise.race([
+    promise,
+    new Promise((_, reject) => {
+      timer = setTimeout(() => reject(new Error(message)), timeoutMs);
+    }),
+  ]).finally(() => {
+    if (timer) clearTimeout(timer);
+  });
+}
+
 let client = null;
 
-try {
+async function main() {
+  try {
   const options = parseArgs(argv.slice(2));
   if (options.help) {
     printHelp();
@@ -432,20 +469,24 @@ try {
   });
 
   console.log("\nSigning in to Telegram. Use a dedicated Telegram account if possible.");
-  await client.start({
-    phoneNumber: async () => phoneNumber,
-    phoneCode: async (isCodeViaApp) => resolvePhoneCode(options, isCodeViaApp),
-    password: async () => resolveTwoStepPassword(options),
-    forceSMS: Boolean(options.forceSms),
-    onError: (error) => {
-      console.error(String(error?.message || error));
-      return Boolean(
-        options.nonInteractive ||
-          hasOwn(options, "phoneCode") ||
-          hasOwn(options, "password"),
-      );
-    },
-  });
+  await withTimeout(
+    client.start({
+      phoneNumber: async () => phoneNumber,
+      phoneCode: async (isCodeViaApp) => resolvePhoneCode(options, isCodeViaApp),
+      password: async () => resolveTwoStepPassword(options),
+      forceSMS: Boolean(options.forceSms),
+      onError: (error) => {
+        console.error(String(error?.message || error));
+        return Boolean(
+          options.nonInteractive ||
+            hasOwn(options, "phoneCode") ||
+            hasOwn(options, "password"),
+        );
+      },
+    }),
+    LOGIN_TIMEOUT_MS,
+    "Telegram login did not continue in time. Check the proxy/network, then try again.",
+  );
 
   const sessionString = client.session.save();
   if (!sessionString) {
@@ -458,14 +499,20 @@ try {
     "Keep the Telegram session private. It authorizes BirdX to read channels visible to this Telegram account.",
   );
   restartBirdxService(options);
-} catch (error) {
-  console.error(
-    `\nRemote Channel configuration failed: ${String(error?.message || error)}`,
-  );
-  process.exitCode = 1;
-} finally {
-  if (client) {
-    await client.disconnect().catch(() => {});
+  } catch (error) {
+    console.error(
+      `\nRemote Channel configuration failed: ${String(error?.message || error)}`,
+    );
+    process.exitCode = 1;
+  } finally {
+    if (client) {
+      await client.disconnect().catch(() => {});
+    }
+    rl?.close();
   }
-  rl?.close();
 }
+
+const keepAlive = setInterval(() => {}, 1000);
+main().finally(() => {
+  clearInterval(keepAlive);
+});
