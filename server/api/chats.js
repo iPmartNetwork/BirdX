@@ -25,6 +25,7 @@ function registerChatRoutes(app, deps) {
     hydrateMissingVideoMetadata,
     isGroupMemberRemoved,
     isMember,
+    isRequiredChannel,
     isVideoFileProcessing,
     listCallLogsForChat,
     listChatMembers,
@@ -829,6 +830,11 @@ function registerChatRoutes(app, deps) {
     if (!isMember(chatId, user.id)) {
       return res.status(400).json({ error: "You are not a member of this group." });
     }
+    if (chat.type === "channel" && isRequiredChannel?.(chatId)) {
+      return res.status(403).json({
+        error: "This channel is required by the workspace and cannot be left.",
+      });
+    }
 
     const members = listChatMembers(chatId);
     const isOwner = members.some(
@@ -961,6 +967,11 @@ function registerChatRoutes(app, deps) {
     }
     if (String(targetMember.role || "").toLowerCase() === "owner") {
       return res.status(400).json({ error: "Owner cannot be removed." });
+    }
+    if (chat.type === "channel" && isRequiredChannel?.(chatId)) {
+      return res.status(403).json({
+        error: "Members cannot be removed from a required channel.",
+      });
     }
 
     removeChatMember(chatId, target.id);
@@ -1225,7 +1236,14 @@ function registerChatRoutes(app, deps) {
       return res.status(404).json({ error: "User not found." });
     }
 
-    hideChatsForUser(user.id, chatIds.map((id) => Number(id)).filter(Boolean));
+    const normalizedChatIds = chatIds.map((id) => Number(id)).filter(Boolean);
+    if (normalizedChatIds.some((chatId) => isRequiredChannel?.(chatId))) {
+      return res.status(403).json({
+        error: "Required channels cannot be hidden.",
+      });
+    }
+
+    hideChatsForUser(user.id, normalizedChatIds);
 
     res.json({ ok: true });
   });
