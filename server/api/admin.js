@@ -32,10 +32,15 @@ function registerAdminRoutes(app, deps) {
     buildInspectSnapshot,
     buildTimestampSchedule,
     addChatMember,
+    applyRequiredChannelsToAllUsers,
     clearChatMemberLeft,
     clearGroupMemberRemoved,
     getChatMemberRole,
+    isRequiredChannel,
+    listAvailableRequiredChannels,
+    listRequiredChannels,
     setChatMemberRole,
+    setRequiredChannels,
     avatarUploadRootDir,
     fs,
     path,
@@ -165,6 +170,7 @@ function registerAdminRoutes(app, deps) {
       auditRead: ["admin"],
       backupsWrite: ["admin"],
       settingsRead: ["admin", "moderator", "support"],
+      settingsWrite: ["admin"],
     };
     return (permissions[permission] || []).includes(role);
   };
@@ -1088,6 +1094,7 @@ function registerAdminRoutes(app, deps) {
       chat: {
         ...chat,
         allow_member_invites: Boolean(Number(chat.allow_member_invites || 0)),
+        required_channel: Boolean(isRequiredChannel?.(chatId)),
       },
       stats: {
         members: Number(stats?.members || 0),
@@ -1240,6 +1247,11 @@ function registerAdminRoutes(app, deps) {
       [chatId, userId],
     );
     if (!member?.id) return res.status(404).json({ error: "Member not found." });
+    if (chat.type === "channel" && isRequiredChannel?.(chatId)) {
+      return res.status(403).json({
+        error: "Members cannot be removed from a required channel.",
+      });
+    }
     if (
       normalizeChatMemberRole(member.role) === "owner" &&
       Number(adminGetRow("SELECT COUNT(*) AS count FROM chat_members WHERE chat_id = ? AND role = 'owner'", [chatId])?.count || 0) <= 1
@@ -1463,6 +1475,78 @@ function registerAdminRoutes(app, deps) {
     res.json({ ok: true, backups: listBackupFiles() });
   });
 
+  app.get("/api/admin/required-channels", (req, res) => {
+    const session = requireAdminSession(req, res, "settingsRead");
+    if (!session) return;
+
+    res.json({
+      ok: true,
+      requiredChannels: listRequiredChannels?.() || [],
+      availableChannels: listAvailableRequiredChannels?.() || [],
+    });
+  });
+
+  app.put("/api/admin/required-channels", (req, res) => {
+    const session = requireAdminSession(req, res, "settingsWrite");
+    if (!session) return;
+    if (!requireAdminPassword(req, res, session)) return;
+
+    const requestedIds = Array.isArray(req.body?.chatIds)
+      ? req.body.chatIds
+      : Array.isArray(req.body?.requiredChannelIds)
+        ? req.body.requiredChannelIds
+        : [];
+    const selectedIds = Array.from(
+      new Set(
+        requestedIds
+          .map((id) => Number(id))
+          .filter((id) => Number.isFinite(id) && id > 0),
+      ),
+    );
+    const savedIds = setRequiredChannels?.(selectedIds) || [];
+    const applyResult = req.body?.applyNow
+      ? applyRequiredChannelsToAllUsers?.() || {
+          usersProcessed: 0,
+          membershipsAdded: 0,
+          requiredChannels: savedIds.length,
+        }
+      : null;
+
+    writeAuditLog(req, session, "required_channels.update", "settings", "required_channels", {
+      requestedIds: selectedIds,
+      savedIds,
+      applyNow: Boolean(req.body?.applyNow),
+      applyResult,
+    });
+
+    res.json({
+      ok: true,
+      requiredChannels: listRequiredChannels?.() || [],
+      availableChannels: listAvailableRequiredChannels?.() || [],
+      result: applyResult,
+    });
+  });
+
+  app.post("/api/admin/required-channels/apply", (req, res) => {
+    const session = requireAdminSession(req, res, "settingsWrite");
+    if (!session) return;
+    if (!requireAdminPassword(req, res, session)) return;
+
+    const result = applyRequiredChannelsToAllUsers?.() || {
+      usersProcessed: 0,
+      membershipsAdded: 0,
+      requiredChannels: 0,
+    };
+    writeAuditLog(req, session, "required_channels.apply", "settings", "required_channels", result);
+
+    res.json({
+      ok: true,
+      result,
+      requiredChannels: listRequiredChannels?.() || [],
+      availableChannels: listAvailableRequiredChannels?.() || [],
+    });
+  });
+
   app.get("/api/admin/settings", (req, res) => {
     const session = requireAdminSession(req, res, "settingsRead");
     if (!session) return;
@@ -1482,6 +1566,7 @@ function registerAdminRoutes(app, deps) {
         adminUsernames: Array.from(adminUsernameSet),
         storageEncryption: Boolean(storageEncryption?.isEnabled?.()),
         database: dbInfo?.database || null,
+        requiredChannels: listRequiredChannels?.() || [],
       },
     });
   });
@@ -1582,6 +1667,11 @@ function registerAdminRoutes(app, deps) {
 
             adminRun(
               `DELETE FROM hidden_chats WHERE chat_id IN (${chunkPlaceholders})`,
+              chunk,
+            );
+
+            adminRun(
+              `DELETE FROM required_channels WHERE chat_id IN (${chunkPlaceholders})`,
               chunk,
             );
 
@@ -1745,6 +1835,10 @@ function registerAdminRoutes(app, deps) {
               );
               adminRun(
                 `DELETE FROM hidden_chats WHERE chat_id IN (${chunkPlaceholders})`,
+                chunk,
+              );
+              adminRun(
+                `DELETE FROM required_channels WHERE chat_id IN (${chunkPlaceholders})`,
                 chunk,
               );
               adminRun(
@@ -2920,6 +3014,7 @@ function registerAdminRoutes(app, deps) {
           adminRun("DELETE FROM chat_messages");
           adminRun("DELETE FROM hidden_chats");
           adminRun("DELETE FROM chat_members");
+          adminRun("DELETE FROM required_channels");
           adminRun("DELETE FROM chats");
           adminRun("DELETE FROM sessions");
           adminRun("DELETE FROM users");
