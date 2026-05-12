@@ -31,6 +31,7 @@
     "db:chat:delete": "node scripts/delete-chat.js",
     "db:file:delete": "node scripts/delete-file.js",
     "db:user:edit": "node scripts/edit-user.js",
+    "remote:configure": "node scripts/configure-remote-channel.js",
     "db:user:ban": "node scripts/ban-user.js",
     "db:user:delete": "node scripts/delete-user.js",
     "db:user:create": "node scripts/create-user.js",
