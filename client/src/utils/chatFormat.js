@@ -3,12 +3,72 @@ export const formatBytesAsMb = (bytes) =>
 
 export const APP_TIME_ZONE = "Asia/Tehran";
 
+const zonedDateTimePartFormatter = new Intl.DateTimeFormat("en-US", {
+  timeZone: APP_TIME_ZONE,
+  year: "numeric",
+  month: "numeric",
+  day: "numeric",
+  hour: "numeric",
+  minute: "numeric",
+  second: "numeric",
+  hourCycle: "h23",
+});
+
+const getZonedParts = (date) => {
+  const parts = zonedDateTimePartFormatter.formatToParts(date);
+  return Object.fromEntries(
+    parts
+      .filter((part) => part.type !== "literal")
+      .map((part) => [part.type, Number(part.value)]),
+  );
+};
+
+const getAppTimeZoneOffsetMs = (date) => {
+  const parts = getZonedParts(date);
+  const zonedAsUtc = Date.UTC(
+    parts.year || 0,
+    (parts.month || 1) - 1,
+    parts.day || 1,
+    parts.hour || 0,
+    parts.minute || 0,
+    parts.second || 0,
+  );
+  return zonedAsUtc - Math.floor(date.getTime() / 1000) * 1000;
+};
+
+const parseAppTimeZoneDate = (value) => {
+  const match = String(value || "").match(
+    /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})(?::(\d{2})(?:\.(\d{1,3}))?)?$/,
+  );
+  if (!match) return null;
+
+  const [, year, month, day, hour, minute, second = "0", millisecond = "0"] =
+    match;
+  const wallTimeAsUtc = Date.UTC(
+    Number(year),
+    Number(month) - 1,
+    Number(day),
+    Number(hour),
+    Number(minute),
+    Number(second),
+    Number(millisecond.padEnd(3, "0")),
+  );
+  const firstOffset = getAppTimeZoneOffsetMs(new Date(wallTimeAsUtc));
+  let instant = wallTimeAsUtc - firstOffset;
+  const secondOffset = getAppTimeZoneOffsetMs(new Date(instant));
+  if (secondOffset !== firstOffset) {
+    instant = wallTimeAsUtc - secondOffset;
+  }
+  return new Date(instant);
+};
+
 export const parseServerDate = (value) => {
   if (!value) return new Date();
   if (typeof value === "string") {
     const normalized = value.includes("T") ? value : value.replace(" ", "T");
     const hasExplicitTimezone = /(?:Z|[+-]\d{2}:?\d{2})$/i.test(normalized);
-    return hasExplicitTimezone ? new Date(normalized) : new Date(`${normalized}Z`);
+    if (hasExplicitTimezone) return new Date(normalized);
+    return parseAppTimeZoneDate(normalized) || new Date(normalized);
   }
   return new Date(value);
 };
