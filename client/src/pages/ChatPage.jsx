@@ -7056,7 +7056,7 @@ const peerStatusLabel = !activeHeaderPeer || activeHeaderPeer?.isDeleted
         activeFallbackTitle={activeFallbackTitle}
         peerStatusLabel={resolvedHeaderSubtitle}
         typingIndicator={typingIndicator}
-        onStartCall={canStartVoiceCall ? () => startOutgoingCall("voice") : null}
+        onStartCall={canStartVoiceCall ? startOutgoingCall : null}
         onStartVideoCall={canStartVoiceCall ? () => startOutgoingCall("video") : null}
         isGroupChat={isActiveGroupChat}
         isChannelChat={isActiveChannelChat}
