@@ -540,6 +540,9 @@ export default function ChatPage({ user, setUser, isDark, setIsDark, toggleTheme
   const [callMuted, setCallMuted] = useState(false);
   const [callVideoOff, setCallVideoOff] = useState(false);
   const [remoteVideoActive, setRemoteVideoActive] = useState(false);
+  const [remoteVideoMuted, setRemoteVideoMuted] = useState(false);
+  const [remoteVideoEnded, setRemoteVideoEnded] = useState(false);
+  const [callNetworkQuality, setCallNetworkQuality] = useState("unknown");
   const [fullscreenCallControlsVisible, setFullscreenCallControlsVisible] =
     useState(true);
   const [fullscreenVideoMinimized, setFullscreenVideoMinimized] = useState(false);
@@ -602,6 +605,8 @@ export default function ChatPage({ user, setUser, isDark, setIsDark, toggleTheme
   const pendingIceCandidatesRef = useRef([]);
   const callResetTimerRef = useRef(null);
   const fullscreenCallControlsTimerRef = useRef(null);
+  const callQualityTimerRef = useRef(null);
+  const callQualityStatsRef = useRef(null);
   const ringtoneAudioContextRef = useRef(null);
   const ringtoneTimersRef = useRef([]);
   const ringtoneActiveRef = useRef(false);
@@ -680,6 +685,87 @@ export default function ChatPage({ user, setUser, isDark, setIsDark, toggleTheme
       fullscreenCallControlsTimerRef.current = null;
       setFullscreenCallControlsVisible(false);
     }, FULLSCREEN_VIDEO_CONTROLS_HIDE_MS);
+  }
+
+  function updateRemoteVideoTrackState(stream = remoteStreamRef.current) {
+    const videoTracks = stream?.getVideoTracks?.() || [];
+    const liveVideoTracks = videoTracks.filter((track) => track.readyState === "live");
+    setRemoteVideoActive(liveVideoTracks.length > 0);
+    setRemoteVideoMuted(
+      liveVideoTracks.length > 0 && liveVideoTracks.every((track) => track.muted),
+    );
+    setRemoteVideoEnded(videoTracks.length > 0 && liveVideoTracks.length === 0);
+  }
+
+  function watchRemoteVideoTracks(stream) {
+    const videoTracks = stream?.getVideoTracks?.() || [];
+    updateRemoteVideoTrackState(stream);
+    videoTracks.forEach((track) => {
+      track.onmute = () => updateRemoteVideoTrackState(stream);
+      track.onunmute = () => updateRemoteVideoTrackState(stream);
+      track.onended = () => updateRemoteVideoTrackState(stream);
+    });
+  }
+
+  function clearCallQualityMonitor() {
+    if (callQualityTimerRef.current && typeof window !== "undefined") {
+      window.clearInterval(callQualityTimerRef.current);
+    }
+    callQualityTimerRef.current = null;
+    callQualityStatsRef.current = null;
+    setCallNetworkQuality("unknown");
+  }
+
+  async function sampleCallQuality(peer = peerRef.current) {
+    if (!peer?.getStats) return;
+    try {
+      const stats = await peer.getStats();
+      let packetsLost = 0;
+      let packetsReceived = 0;
+      let freezeCount = 0;
+      let framesDropped = 0;
+
+      stats.forEach((report) => {
+        if (report.type !== "inbound-rtp") return;
+        if (report.kind && report.kind !== "video" && report.kind !== "audio") return;
+        packetsLost += Math.max(0, Number(report.packetsLost || 0));
+        packetsReceived += Math.max(0, Number(report.packetsReceived || 0));
+        freezeCount += Math.max(0, Number(report.freezeCount || 0));
+        framesDropped += Math.max(0, Number(report.framesDropped || 0));
+      });
+
+      const previous = callQualityStatsRef.current;
+      const next = {
+        packetsLost,
+        packetsReceived,
+        freezeCount,
+        framesDropped,
+      };
+      callQualityStatsRef.current = next;
+      if (!previous) return;
+
+      const lostDelta = Math.max(0, packetsLost - previous.packetsLost);
+      const receivedDelta = Math.max(0, packetsReceived - previous.packetsReceived);
+      const freezeDelta = Math.max(0, freezeCount - previous.freezeCount);
+      const droppedDelta = Math.max(0, framesDropped - previous.framesDropped);
+      const packetTotal = lostDelta + receivedDelta;
+      const lossRatio = packetTotal > 0 ? lostDelta / packetTotal : 0;
+      const poor =
+        packetTotal >= 20 &&
+        (lossRatio >= 0.08 || freezeDelta >= 2 || droppedDelta >= 12);
+      setCallNetworkQuality(poor ? "poor" : "good");
+    } catch {
+      // getStats support varies by browser; quality UI is best-effort.
+    }
+  }
+
+  function startCallQualityMonitor(peer = peerRef.current) {
+    clearCallQualityMonitor();
+    if (typeof window === "undefined" || !peer?.getStats) return;
+    void sampleCallQuality(peer);
+    callQualityTimerRef.current = window.setInterval(() => {
+      void sampleCallQuality(peer);
+    }, 4000);
   }
 
   async function requestCallWakeLock() {
@@ -972,6 +1058,7 @@ export default function ChatPage({ user, setUser, isDark, setIsDark, toggleTheme
 
   function cleanupCallMedia() {
     releaseCallWakeLock();
+    clearCallQualityMonitor();
     localStreamRef.current?.getTracks?.().forEach((track) => {
       try {
         track.stop();
@@ -1018,6 +1105,9 @@ export default function ChatPage({ user, setUser, isDark, setIsDark, toggleTheme
     setCallMuted(false);
     setCallVideoOff(false);
     setRemoteVideoActive(false);
+    setRemoteVideoMuted(false);
+    setRemoteVideoEnded(false);
+    setCallNetworkQuality("unknown");
     setFullscreenCallControlsVisible(true);
     resetCallCameraState();
     setCallDurationSeconds(0);
@@ -1191,6 +1281,7 @@ export default function ChatPage({ user, setUser, isDark, setIsDark, toggleTheme
       iceCandidatePoolSize: 4,
     });
     peerRef.current = peer;
+    startCallQualityMonitor(peer);
 
     stream.getTracks().forEach((track) => {
       peer.addTrack(track, stream);
@@ -1209,10 +1300,7 @@ export default function ChatPage({ user, setUser, isDark, setIsDark, toggleTheme
       const [remoteStream] = event.streams || [];
       if (!remoteStream) return;
       remoteStreamRef.current = remoteStream;
-      const remoteVideoTracks = remoteStream.getVideoTracks?.() || [];
-      setRemoteVideoActive(
-        remoteVideoTracks.some((track) => track.readyState === "live"),
-      );
+      watchRemoteVideoTracks(remoteStream);
       const audio = ensureRemoteAudioElement();
       if (!audio) return;
       audio.muted = false;
@@ -1284,6 +1372,9 @@ export default function ChatPage({ user, setUser, isDark, setIsDark, toggleTheme
     setCallMuted(false);
     setCallVideoOff(false);
     setRemoteVideoActive(false);
+    setRemoteVideoMuted(false);
+    setRemoteVideoEnded(false);
+    setCallNetworkQuality("unknown");
     setCallDurationSeconds(0);
 
     try {
@@ -1334,6 +1425,9 @@ export default function ChatPage({ user, setUser, isDark, setIsDark, toggleTheme
     setCallMuted(false);
     setCallVideoOff(false);
     setRemoteVideoActive(false);
+    setRemoteVideoMuted(false);
+    setRemoteVideoEnded(false);
+    setCallNetworkQuality("unknown");
     setCallDurationSeconds(0);
 
     try {
@@ -7050,6 +7144,21 @@ const peerStatusLabel = !activeHeaderPeer || activeHeaderPeer?.isDeleted
     callIsVideo && callIsConnected && !fullscreenVideoMinimized;
   const callIsMinimizedVideo =
     callIsVideo && callIsConnected && fullscreenVideoMinimized;
+  const remoteVideoVisible =
+    remoteVideoActive && !remoteVideoMuted && !remoteVideoEnded;
+  const callVideoStatusLabel = callIsVideo
+    ? callState?.status === "reconnecting"
+      ? "Reconnecting..."
+      : callNetworkQuality === "poor"
+        ? "Poor connection"
+        : remoteVideoEnded || remoteVideoMuted
+          ? "Camera off"
+          : !remoteVideoActive
+            ? callIsConnected
+              ? "Waiting for video..."
+              : "Connecting..."
+            : ""
+    : "";
   const safeNewGroupForm = {
     nickname: String(newGroupForm?.nickname || ""),
     username: String(newGroupForm?.username || ""),
@@ -7560,15 +7669,15 @@ const peerStatusLabel = !activeHeaderPeer || activeHeaderPeer?.isDeleted
         <video
           ref={remoteVideoRef}
           className={`h-full w-full bg-slate-950 object-cover ${
-            remoteVideoActive ? "block" : "hidden"
+            remoteVideoVisible ? "block" : "hidden"
           }`}
           autoPlay
           playsInline
           muted
         />
-        {!remoteVideoActive ? (
+        {!remoteVideoVisible ? (
           <div className="absolute inset-0 flex items-center justify-center text-xs font-semibold text-white/70">
-            {callStatusLabel}
+            {callVideoStatusLabel || callStatusLabel}
           </div>
         ) : null}
       </button>
@@ -7590,12 +7699,30 @@ const peerStatusLabel = !activeHeaderPeer || activeHeaderPeer?.isDeleted
       <video
         ref={remoteVideoRef}
         className={`h-full w-full bg-slate-950 object-cover ${
-          remoteVideoActive ? "block" : "hidden"
+          remoteVideoVisible ? "block" : "hidden"
         }`}
         autoPlay
         playsInline
         muted
       />
+      {!remoteVideoVisible ? (
+        <div className="absolute inset-0 flex flex-col items-center justify-center px-6 text-center text-white">
+          <div className="flex h-20 w-20 items-center justify-center rounded-full border border-white/15 bg-white/10 text-2xl font-bold">
+            {getAvatarInitials(callPeerName || "C")}
+          </div>
+          <p className="mt-3 max-w-full truncate text-sm font-semibold" title={callPeerName}>
+            {callPeerName}
+          </p>
+          <p className="mt-1 text-xs text-white/70">
+            {callVideoStatusLabel || callStatusLabel}
+          </p>
+        </div>
+      ) : null}
+      {callVideoStatusLabel ? (
+        <div className="pointer-events-none absolute left-4 top-4 max-w-[calc(100%-2rem)] rounded-full bg-black/45 px-3 py-1.5 text-xs font-semibold text-white shadow-lg backdrop-blur-md sm:left-6 sm:top-6">
+          {callVideoStatusLabel}
+        </div>
+      ) : null}
       <div className="pointer-events-none absolute bottom-28 right-4 h-20 w-28 overflow-hidden rounded-2xl border border-white/20 bg-slate-900 shadow-2xl shadow-black/40 sm:bottom-8 sm:right-6 sm:h-32 sm:w-44">
         {callVideoOff ? (
           <div className="flex h-full w-full items-center justify-center bg-slate-800 text-white">
@@ -7740,7 +7867,7 @@ const peerStatusLabel = !activeHeaderPeer || activeHeaderPeer?.isDeleted
 
       {callIsVideo ? (
         <div className="relative mx-4 mb-4 aspect-video overflow-hidden rounded-3xl bg-slate-950 shadow-inner">
-          {!remoteVideoActive ? (
+          {!remoteVideoVisible ? (
             <div className="absolute inset-0 flex flex-col items-center justify-center px-6 text-center text-white">
               <div className="flex h-20 w-20 items-center justify-center rounded-full border border-white/15 bg-white/10 text-2xl font-bold">
                 {getAvatarInitials(callPeerName || "C")}
@@ -7748,18 +7875,25 @@ const peerStatusLabel = !activeHeaderPeer || activeHeaderPeer?.isDeleted
               <p className="mt-3 max-w-full truncate text-sm font-semibold" title={callPeerName}>
                 {callPeerName}
               </p>
-              <p className="mt-1 text-xs text-white/60">{callStatusLabel}</p>
+              <p className="mt-1 text-xs text-white/60">
+                {callVideoStatusLabel || callStatusLabel}
+              </p>
             </div>
           ) : null}
           <video
             ref={remoteVideoRef}
             className={`h-full w-full bg-slate-950 object-cover ${
-              remoteVideoActive ? "block" : "hidden"
+              remoteVideoVisible ? "block" : "hidden"
             }`}
             autoPlay
             playsInline
             muted
           />
+          {callVideoStatusLabel ? (
+            <div className="pointer-events-none absolute left-3 top-3 rounded-full bg-black/45 px-3 py-1.5 text-xs font-semibold text-white shadow-lg backdrop-blur-md">
+              {callVideoStatusLabel}
+            </div>
+          ) : null}
           <div className="absolute bottom-3 right-3 h-24 w-32 overflow-hidden rounded-2xl border border-white/20 bg-slate-900 shadow-xl sm:h-32 sm:w-44">
             {callVideoOff ? (
               <div className="flex h-full w-full items-center justify-center bg-slate-800 text-white">
