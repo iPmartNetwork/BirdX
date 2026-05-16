@@ -945,7 +945,42 @@ const io = new SocketIOServer(httpServer, {
 const activeCalls = new Map();
 const liveCalls = new Map();
 const callDisconnectTimers = new Map();
+const activeCallTimers = new Map();
 const CALL_DISCONNECT_GRACE_MS = 45000;
+const CALL_RING_TIMEOUT_MS = 45000;
+
+function normalizeCallType(value) {
+  return String(value || "voice").toLowerCase() === "video" ? "video" : "voice";
+}
+
+function clearActiveCallTimeout(roomId) {
+  const timer = activeCallTimers.get(roomId);
+  if (!timer) return;
+  clearTimeout(timer);
+  activeCallTimers.delete(roomId);
+}
+
+function scheduleActiveCallTimeout(roomId) {
+  if (!roomId) return;
+  clearActiveCallTimeout(roomId);
+  const timer = setTimeout(() => {
+    activeCallTimers.delete(roomId);
+    const activeCall = activeCalls.get(roomId);
+    if (!activeCall) return;
+    activeCalls.delete(roomId);
+    liveCalls.delete(roomId);
+    finishCallLog({
+      roomId,
+      status: "missed",
+      reason: "missed",
+    });
+    io.to(roomId).emit("call-ended", { roomId, reason: "missed" });
+  }, CALL_RING_TIMEOUT_MS);
+  if (typeof timer.unref === "function") {
+    timer.unref();
+  }
+  activeCallTimers.set(roomId, timer);
+}
 
 function clearCallDisconnectTimer(roomId) {
   const timer = callDisconnectTimers.get(roomId);
@@ -958,6 +993,7 @@ function scheduleCallDisconnectEnd(roomId) {
   if (!roomId || callDisconnectTimers.has(roomId)) return;
   const timer = setTimeout(() => {
     callDisconnectTimers.delete(roomId);
+    clearActiveCallTimeout(roomId);
     activeCalls.delete(roomId);
     liveCalls.delete(roomId);
     finishCallLog({
@@ -982,6 +1018,7 @@ function parseCallRoomChatId(roomId) {
 async function notifyIncomingCallByPush({
   roomId,
   chatId,
+  callType,
   callerUserId,
   callerName,
 }) {
@@ -1007,11 +1044,13 @@ async function notifyIncomingCallByPush({
     );
   if (!recipientIds.length) return;
 
+  const callTypeLabel = normalizeCallType(callType);
   await sendPushNotificationToUsers(recipientIds, {
-    title: "Incoming voice call",
+    title: `Incoming ${callTypeLabel} call`,
     body: `${callerName || "Someone"} is calling...`,
     data: {
       type: "incoming_call",
+      callType: callTypeLabel,
       chatId: targetChatId,
       roomId,
       url: `/chat?openChatId=${encodeURIComponent(String(targetChatId))}`,
@@ -1055,6 +1094,7 @@ io.on("connection", (socket) => {
       typeof payload === "object" ? Number(payload?.userId || 0) || null : null;
     console.log("LEAVE CALL:", socket.id, roomId);
     clearCallDisconnectTimer(roomId);
+    clearActiveCallTimeout(roomId);
     activeCalls.delete(roomId);
     liveCalls.delete(roomId);
     finishCallLog({
@@ -1067,15 +1107,18 @@ io.on("connection", (socket) => {
     socket.to(roomId).emit("call-ended", { roomId });
   });
 
-  socket.on("call-user", ({ roomId, chatId, callerUserId, callerUsername, callerName }) => {
+  socket.on("call-user", ({ roomId, chatId, callerUserId, callerUsername, callerName, callType }) => {
     if (!roomId) return;
     clearCallDisconnectTimer(roomId);
+    clearActiveCallTimeout(roomId);
     socket.join(roomId);
     socketCallRooms.add(roomId);
 
+    const normalizedCallType = normalizeCallType(callType);
     const payload = {
       roomId,
       chatId: Number(chatId || parseCallRoomChatId(roomId) || 0) || null,
+      callType: normalizedCallType,
       callerUserId: Number(callerUserId || 0) || null,
       callerUsername: callerUsername || "",
       callerName: callerName || "Someone",
@@ -1091,8 +1134,9 @@ io.on("connection", (socket) => {
       roomId,
       callerUserId: payload.callerUserId,
       participantUserIds,
-      callType: "voice",
+      callType: normalizedCallType,
     });
+    scheduleActiveCallTimeout(roomId);
 
     console.log("CALL USER:", socket.id, roomId, callerName);
     console.log(
@@ -1112,6 +1156,7 @@ io.on("connection", (socket) => {
     if (!roomId) return;
     console.log("ACCEPT CALL:", socket.id, roomId);
     clearCallDisconnectTimer(roomId);
+    clearActiveCallTimeout(roomId);
     socket.join(roomId);
     socketCallRooms.add(roomId);
     const activeCall = activeCalls.get(roomId);
@@ -1127,6 +1172,7 @@ io.on("connection", (socket) => {
     if (!roomId) return;
     console.log("REJECT CALL:", socket.id, roomId);
     clearCallDisconnectTimer(roomId);
+    clearActiveCallTimeout(roomId);
     activeCalls.delete(roomId);
     finishCallLog({
       roomId,
