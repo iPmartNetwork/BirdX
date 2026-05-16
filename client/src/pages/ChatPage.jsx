@@ -44,7 +44,16 @@ import { useNewGroupModal } from "../hooks/chat/useNewGroupModal.js";
 import { usePerfTelemetry } from "../hooks/chat/usePerfTelemetry.js";
 import { useResumeRefresh } from "../hooks/chat/useResumeRefresh.js";
 import { useAppReleaseInfo } from "../hooks/useAppReleaseInfo.js";
-import { Bookmark, Mic, MicOff, Phone, PhoneOff, Volume2 } from "../icons/lucide.js";
+import {
+  Bookmark,
+  Mic,
+  MicOff,
+  Phone,
+  PhoneOff,
+  Video,
+  VideoOff,
+  Volume2,
+} from "../icons/lucide.js";
 import { CLIPBOARD_COPY_EVENT } from "../utils/clipboard.js";
 import { CACHE_STORES } from "../utils/cacheDb.js";
 import { downloadMessageFiles } from "../utils/fileDownload.js";
@@ -387,9 +396,9 @@ const resolveCallIceServers = () => {
 const CALL_ICE_SERVERS = resolveCallIceServers();
 
 const CALL_STATUS_LABELS = {
-  preparing: "Preparing microphone...",
+  preparing: "Preparing call...",
   calling: "Calling...",
-  ringing: "Incoming voice call",
+  ringing: "Incoming call",
   connecting: "Connecting...",
   connected: "Connected",
   reconnecting: "Reconnecting...",
@@ -423,18 +432,25 @@ const formatCallDuration = (seconds) => {
   return `${minutes}:${String(remainingSeconds).padStart(2, "0")}`;
 };
 
-const getCallErrorMessage = (error) => {
+const getCallErrorMessage = (error, callType = "voice") => {
   const name = String(error?.name || "");
+  const isVideoCall = normalizeCallType(callType) === "video";
   if (name === "NotAllowedError" || name === "PermissionDeniedError") {
-    return "Microphone permission was denied.";
+    return isVideoCall
+      ? "Camera or microphone permission was denied."
+      : "Microphone permission was denied.";
   }
   if (name === "NotFoundError" || name === "DevicesNotFoundError") {
-    return "No microphone was found on this device.";
+    return isVideoCall
+      ? "No camera or microphone was found on this device."
+      : "No microphone was found on this device.";
   }
   if (name === "NotReadableError" || name === "TrackStartError") {
-    return "The microphone is already in use by another app.";
+    return isVideoCall
+      ? "The camera or microphone is already in use by another app."
+      : "The microphone is already in use by another app.";
   }
-  return error?.message || "Voice call could not be started.";
+  return error?.message || `${isVideoCall ? "Video" : "Voice"} call could not be started.`;
 };
 
 const buildCallChatUrl = (chatId) => {
@@ -509,6 +525,8 @@ export default function ChatPage({ user, setUser, isDark, setIsDark, toggleTheme
   const [callState, setCallState] = useState(null);
   const [incomingCall, setIncomingCall] = useState(null);
   const [callMuted, setCallMuted] = useState(false);
+  const [callVideoOff, setCallVideoOff] = useState(false);
+  const [remoteVideoActive, setRemoteVideoActive] = useState(false);
   const [callDurationSeconds, setCallDurationSeconds] = useState(0);
   const updateToastTimerRef = useRef(null);
   const copyToastTimerRef = useRef(null);
@@ -546,7 +564,12 @@ export default function ChatPage({ user, setUser, isDark, setIsDark, toggleTheme
   const lazyChunksPreloadedRef = useRef(false);
   const peerRef = useRef(null);
   const localStreamRef = useRef(null);
+  const remoteStreamRef = useRef(null);
   const remoteAudioRef = useRef(null);
+  const localVideoRef = useRef(null);
+  const remoteVideoRef = useRef(null);
+  const callMutedRef = useRef(false);
+  const callVideoOffRef = useRef(false);
   const socketRef = useRef(null);
   const activeChatIdRef = useRef(null);
   const callStateRef = useRef(null);
@@ -564,8 +587,13 @@ export default function ChatPage({ user, setUser, isDark, setIsDark, toggleTheme
   const callWakeLockRef = useRef(null);
 
   function setSyncedCallState(value) {
+    if (typeof value !== "function") {
+      callStateRef.current = value;
+      setCallState(value);
+      return;
+    }
     setCallState((prev) => {
-      const next = typeof value === "function" ? value(prev) : value;
+      const next = value(prev);
       callStateRef.current = next;
       return next;
     });
@@ -586,6 +614,31 @@ export default function ChatPage({ user, setUser, isDark, setIsDark, toggleTheme
     audio.setAttribute?.("playsinline", "");
     remoteAudioRef.current = audio;
     return audio;
+  }
+
+  function attachVideoElement(video, stream, { muted = false } = {}) {
+    if (!video) return;
+    video.autoplay = true;
+    video.playsInline = true;
+    video.muted = muted;
+    video.setAttribute?.("playsinline", "");
+    if (video.srcObject !== stream) {
+      video.srcObject = stream || null;
+    }
+    if (stream) {
+      video.play?.().catch(() => null);
+    }
+  }
+
+  function syncCallVideoElements() {
+    const activeCallType = normalizeCallType(callStateRef.current?.callType);
+    const isVideoCall = activeCallType === "video";
+    attachVideoElement(localVideoRef.current, isVideoCall ? localStreamRef.current : null, {
+      muted: true,
+    });
+    attachVideoElement(remoteVideoRef.current, isVideoCall ? remoteStreamRef.current : null, {
+      muted: true,
+    });
   }
 
   async function requestCallWakeLock() {
@@ -662,10 +715,26 @@ export default function ChatPage({ user, setUser, isDark, setIsDark, toggleTheme
     });
   }
 
+  function syncLocalVideoMute(nextVideoOff) {
+    localStreamRef.current?.getVideoTracks?.().forEach((track) => {
+      track.enabled = !nextVideoOff;
+    });
+  }
+
   function toggleCallMute() {
     setCallMuted((prev) => {
       const next = !prev;
+      callMutedRef.current = next;
       syncLocalAudioMute(next);
+      return next;
+    });
+  }
+
+  function toggleCallVideo() {
+    setCallVideoOff((prev) => {
+      const next = !prev;
+      callVideoOffRef.current = next;
+      syncLocalVideoMute(next);
       return next;
     });
   }
@@ -809,6 +878,7 @@ export default function ChatPage({ user, setUser, isDark, setIsDark, toggleTheme
       }
     });
     localStreamRef.current = null;
+    remoteStreamRef.current = null;
 
     try {
       peerRef.current?.close?.();
@@ -826,6 +896,8 @@ export default function ChatPage({ user, setUser, isDark, setIsDark, toggleTheme
       }
       remoteAudioRef.current = null;
     }
+    attachVideoElement(localVideoRef.current, null, { muted: true });
+    attachVideoElement(remoteVideoRef.current, null, { muted: true });
   }
 
   function resetCallState() {
@@ -838,7 +910,11 @@ export default function ChatPage({ user, setUser, isDark, setIsDark, toggleTheme
     pendingOfferRef.current = null;
     pendingAnswerRef.current = null;
     pendingIceCandidatesRef.current = [];
+    callMutedRef.current = false;
+    callVideoOffRef.current = false;
     setCallMuted(false);
+    setCallVideoOff(false);
+    setRemoteVideoActive(false);
     setCallDurationSeconds(0);
     setSyncedIncomingCall(null);
     setSyncedCallState(null);
@@ -858,14 +934,15 @@ export default function ChatPage({ user, setUser, isDark, setIsDark, toggleTheme
     }, delayMs);
   }
 
-  function validateMicrophoneSupport() {
+  function validateCallMediaSupport(callType = "voice") {
     if (typeof navigator === "undefined" || !navigator.mediaDevices?.getUserMedia) {
-      throw new Error("Microphone API is not available in this browser.");
+      throw new Error("Media capture is not available in this browser.");
     }
     if (typeof window !== "undefined") {
       const { hostname, protocol } = window.location;
       if (protocol !== "https:" && !isLoopbackHost(hostname)) {
-        throw new Error("Voice calls require HTTPS or localhost.");
+        const label = normalizeCallType(callType) === "video" ? "Video" : "Voice";
+        throw new Error(`${label} calls require HTTPS or localhost.`);
       }
     }
     if (typeof RTCPeerConnection === "undefined") {
@@ -963,15 +1040,25 @@ export default function ChatPage({ user, setUser, isDark, setIsDark, toggleTheme
     await peer.addIceCandidate(new RTCIceCandidate(candidate));
   }
 
-  async function prepareCallPeer(roomId) {
-    validateMicrophoneSupport();
+  async function prepareCallPeer(roomId, callType = callStateRef.current?.callType || "voice") {
+    const normalizedCallType = normalizeCallType(callType);
+    const isVideoCall = normalizedCallType === "video";
+    validateCallMediaSupport(normalizedCallType);
     ensureRemoteAudioElement();
 
     const existingPeer = peerRef.current;
     const hasLiveAudio = localStreamRef.current
       ?.getAudioTracks?.()
       ?.some((track) => track.readyState === "live");
-    if (existingPeer && existingPeer.connectionState !== "closed" && hasLiveAudio) {
+    const hasLiveVideo = localStreamRef.current
+      ?.getVideoTracks?.()
+      ?.some((track) => track.readyState === "live");
+    if (
+      existingPeer &&
+      existingPeer.connectionState !== "closed" &&
+      hasLiveAudio &&
+      (!isVideoCall || hasLiveVideo)
+    ) {
       return existingPeer;
     }
 
@@ -984,11 +1071,19 @@ export default function ChatPage({ user, setUser, isDark, setIsDark, toggleTheme
         noiseSuppression: true,
         autoGainControl: true,
       },
-      video: false,
+      video: isVideoCall
+        ? {
+            width: { ideal: 1280 },
+            height: { ideal: 720 },
+            facingMode: "user",
+          }
+        : false,
     });
     localStreamRef.current = stream;
     setMicrophonePermission("granted");
-    syncLocalAudioMute(callMuted);
+    syncLocalAudioMute(callMutedRef.current);
+    syncLocalVideoMute(callVideoOffRef.current);
+    syncCallVideoElements();
 
     const peer = new RTCPeerConnection({
       iceServers: CALL_ICE_SERVERS,
@@ -1012,11 +1107,17 @@ export default function ChatPage({ user, setUser, isDark, setIsDark, toggleTheme
     peer.ontrack = (event) => {
       const [remoteStream] = event.streams || [];
       if (!remoteStream) return;
+      remoteStreamRef.current = remoteStream;
+      const remoteVideoTracks = remoteStream.getVideoTracks?.() || [];
+      setRemoteVideoActive(
+        remoteVideoTracks.some((track) => track.readyState === "live"),
+      );
       const audio = ensureRemoteAudioElement();
       if (!audio) return;
       audio.muted = false;
       audio.volume = 1;
       audio.srcObject = remoteStream;
+      syncCallVideoElements();
       audio.play?.().catch((error) => {
         console.warn("Remote audio playback was blocked:", error);
         updateCallStatus("connected", {
@@ -1052,6 +1153,7 @@ export default function ChatPage({ user, setUser, isDark, setIsDark, toggleTheme
     await flushPendingOffer();
     await flushPendingAnswer();
     await flushPendingIceCandidates();
+    syncCallVideoElements();
     return peer;
   }
 
@@ -1075,7 +1177,11 @@ export default function ChatPage({ user, setUser, isDark, setIsDark, toggleTheme
 
     setSyncedIncomingCall(null);
     setSyncedCallState(nextState);
+    callMutedRef.current = false;
+    callVideoOffRef.current = false;
     setCallMuted(false);
+    setCallVideoOff(false);
+    setRemoteVideoActive(false);
     setCallDurationSeconds(0);
 
     try {
@@ -1083,7 +1189,7 @@ export default function ChatPage({ user, setUser, isDark, setIsDark, toggleTheme
         throw new Error("Call service is not connected yet.");
       }
       joinCallRoom(roomId, socket);
-      await prepareCallPeer(roomId);
+      await prepareCallPeer(roomId, normalizedCallType);
       socket.emit("call-user", {
         roomId,
         chatId,
@@ -1098,7 +1204,7 @@ export default function ChatPage({ user, setUser, isDark, setIsDark, toggleTheme
       if (String(error?.name || "") === "NotAllowedError") {
         setMicrophonePermission("denied");
       }
-      updateCallStatus("error", { error: getCallErrorMessage(error) });
+      updateCallStatus("error", { error: getCallErrorMessage(error, normalizedCallType) });
       scheduleCallReset(2600);
     }
   }
@@ -1110,16 +1216,21 @@ export default function ChatPage({ user, setUser, isDark, setIsDark, toggleTheme
 
     stopIncomingRingtone();
     setSyncedIncomingCall(null);
+    const normalizedCallType = normalizeCallType(payload?.callType);
     setSyncedCallState({
       roomId,
       chatId: Number(String(roomId).replace(/^chat-/, "")) || null,
-      callType: normalizeCallType(payload?.callType),
+      callType: normalizedCallType,
       isCaller: false,
       status: "connecting",
       peerName: payload?.callerName || "Caller",
       error: "",
     });
+    callMutedRef.current = false;
+    callVideoOffRef.current = false;
     setCallMuted(false);
+    setCallVideoOff(false);
+    setRemoteVideoActive(false);
     setCallDurationSeconds(0);
 
     try {
@@ -1128,7 +1239,7 @@ export default function ChatPage({ user, setUser, isDark, setIsDark, toggleTheme
         throw new Error("Call service is not connected yet.");
       }
       joinCallRoom(roomId, socket);
-      await prepareCallPeer(roomId);
+      await prepareCallPeer(roomId, normalizedCallType);
       socket.emit("accept-call", { roomId, userId: user?.id || null });
       updateCallStatus("connecting", { startedAt: Date.now() });
       await flushPendingOffer();
@@ -1138,7 +1249,7 @@ export default function ChatPage({ user, setUser, isDark, setIsDark, toggleTheme
         setMicrophonePermission("denied");
       }
       socketRef.current?.emit?.("reject-call", { roomId, userId: user?.id || null });
-      updateCallStatus("error", { error: getCallErrorMessage(error) });
+      updateCallStatus("error", { error: getCallErrorMessage(error, normalizedCallType) });
       scheduleCallReset(2600);
     }
   }
@@ -1220,6 +1331,10 @@ export default function ChatPage({ user, setUser, isDark, setIsDark, toggleTheme
     const timer = window.setInterval(syncDuration, 1000);
     return () => window.clearInterval(timer);
   }, [callState?.startedAt]);
+
+  useEffect(() => {
+    syncCallVideoElements();
+  }, [callState?.roomId, callState?.callType, callState?.status]);
 
   useEffect(() => {
     setReplyTarget(null);
@@ -1306,13 +1421,14 @@ export default function ChatPage({ user, setUser, isDark, setIsDark, toggleTheme
       const roomId = payload?.roomId || callStateRef.current?.roomId;
       if (!roomId || callStateRef.current?.roomId !== roomId) return;
       if (!callStateRef.current?.isCaller) return;
+      const activeCallType = normalizeCallType(callStateRef.current?.callType);
       try {
-        await prepareCallPeer(roomId);
+        await prepareCallPeer(roomId, activeCallType);
         await createAndSendOffer(roomId);
         updateCallStatus("connecting", { startedAt: Date.now() });
       } catch (error) {
         console.error("Create offer failed:", error);
-        updateCallStatus("error", { error: getCallErrorMessage(error) });
+        updateCallStatus("error", { error: getCallErrorMessage(error, activeCallType) });
         scheduleCallReset(2600);
       }
     });
@@ -1322,7 +1438,9 @@ export default function ChatPage({ user, setUser, isDark, setIsDark, toggleTheme
         await handleIncomingOffer(offer);
       } catch (error) {
         console.error("Offer handling failed:", error);
-        updateCallStatus("error", { error: getCallErrorMessage(error) });
+        updateCallStatus("error", {
+          error: getCallErrorMessage(error, callStateRef.current?.callType),
+        });
         scheduleCallReset(2600);
       }
     });
@@ -1332,7 +1450,9 @@ export default function ChatPage({ user, setUser, isDark, setIsDark, toggleTheme
         await handleIncomingAnswer(answer);
       } catch (error) {
         console.error("Answer handling failed:", error);
-        updateCallStatus("error", { error: getCallErrorMessage(error) });
+        updateCallStatus("error", {
+          error: getCallErrorMessage(error, callStateRef.current?.callType),
+        });
         scheduleCallReset(2600);
       }
     });
@@ -6794,6 +6914,8 @@ const peerStatusLabel = !activeHeaderPeer || activeHeaderPeer?.isDeleted
   const callPeerName = callState?.peerName || activeFallbackTitle || "Contact";
   const callTypeLabel =
     CALL_TYPE_LABELS[normalizeCallType(callState?.callType)] || CALL_TYPE_LABELS.voice;
+  const callIsVideo = normalizeCallType(callState?.callType) === "video";
+  const incomingCallIsVideo = normalizeCallType(incomingCall?.callType) === "video";
   const callDurationLabel = formatCallDuration(callDurationSeconds);
   const callIsConnected =
     callState?.status === "connected" || callState?.status === "reconnecting";
@@ -6934,7 +7056,8 @@ const peerStatusLabel = !activeHeaderPeer || activeHeaderPeer?.isDeleted
         activeFallbackTitle={activeFallbackTitle}
         peerStatusLabel={resolvedHeaderSubtitle}
         typingIndicator={typingIndicator}
-        onStartCall={canStartVoiceCall ? startOutgoingCall : null}
+        onStartCall={canStartVoiceCall ? () => startOutgoingCall("voice") : null}
+        onStartVideoCall={canStartVoiceCall ? () => startOutgoingCall("video") : null}
         isGroupChat={isActiveGroupChat}
         isChannelChat={isActiveChannelChat}
         isSavedChat={isActiveSavedChat}
@@ -7292,7 +7415,11 @@ const peerStatusLabel = !activeHeaderPeer || activeHeaderPeer?.isDeleted
 
 {callState ? (
   <div className="fixed inset-0 z-[300] flex items-center justify-center bg-slate-950/75 px-4 py-6 backdrop-blur-sm">
-    <div className="w-full max-w-sm overflow-hidden rounded-[2rem] border border-white/10 bg-white shadow-2xl dark:bg-slate-950">
+    <div
+      className={`w-full overflow-hidden rounded-[2rem] border border-white/10 bg-white shadow-2xl dark:bg-slate-950 ${
+        callIsVideo ? "max-w-3xl" : "max-w-sm"
+      }`}
+    >
       <div className="relative px-6 pb-6 pt-7 text-center text-slate-900 dark:text-white">
         <div className="absolute inset-x-0 top-0 h-28 bg-emerald-500/15 dark:bg-emerald-400/10" />
         <div className="relative mx-auto flex h-20 w-20 items-center justify-center rounded-full border border-emerald-200 bg-emerald-50 text-2xl font-bold text-emerald-700 shadow-lg shadow-emerald-500/20 dark:border-emerald-500/30 dark:bg-emerald-500/15 dark:text-emerald-100">
@@ -7324,6 +7451,46 @@ const peerStatusLabel = !activeHeaderPeer || activeHeaderPeer?.isDeleted
         ) : null}
       </div>
 
+      {callIsVideo ? (
+        <div className="relative mx-4 mb-4 aspect-video overflow-hidden rounded-3xl bg-slate-950 shadow-inner">
+          {!remoteVideoActive ? (
+            <div className="absolute inset-0 flex flex-col items-center justify-center px-6 text-center text-white">
+              <div className="flex h-20 w-20 items-center justify-center rounded-full border border-white/15 bg-white/10 text-2xl font-bold">
+                {getAvatarInitials(callPeerName || "C")}
+              </div>
+              <p className="mt-3 max-w-full truncate text-sm font-semibold" title={callPeerName}>
+                {callPeerName}
+              </p>
+              <p className="mt-1 text-xs text-white/60">{callStatusLabel}</p>
+            </div>
+          ) : null}
+          <video
+            ref={remoteVideoRef}
+            className={`h-full w-full bg-slate-950 object-cover ${
+              remoteVideoActive ? "block" : "hidden"
+            }`}
+            autoPlay
+            playsInline
+            muted
+          />
+          <div className="absolute bottom-3 right-3 h-24 w-32 overflow-hidden rounded-2xl border border-white/20 bg-slate-900 shadow-xl sm:h-32 sm:w-44">
+            {callVideoOff ? (
+              <div className="flex h-full w-full items-center justify-center bg-slate-800 text-white">
+                <VideoOff size={22} />
+              </div>
+            ) : (
+              <video
+                ref={localVideoRef}
+                className="h-full w-full bg-slate-900 object-cover"
+                autoPlay
+                playsInline
+                muted
+              />
+            )}
+          </div>
+        </div>
+      ) : null}
+
       <div className="grid grid-cols-3 gap-3 border-y border-slate-200 bg-slate-50 px-5 py-4 dark:border-white/10 dark:bg-slate-900/80">
         <button
           type="button"
@@ -7337,14 +7504,29 @@ const peerStatusLabel = !activeHeaderPeer || activeHeaderPeer?.isDeleted
           {callMuted ? <MicOff size={18} /> : <Mic size={18} />}
           {callMuted ? "Muted" : "Mic"}
         </button>
-        <button
-          type="button"
-          onClick={() => remoteAudioRef.current?.play?.().catch(() => null)}
-          className="flex h-14 flex-col items-center justify-center gap-1 rounded-2xl border border-slate-200 bg-white text-xs font-semibold text-slate-700 transition hover:border-emerald-300 hover:text-emerald-700 dark:border-white/10 dark:bg-slate-950 dark:text-slate-200 dark:hover:border-emerald-500/40 dark:hover:text-emerald-100"
-        >
-          <Volume2 size={18} />
-          Audio
-        </button>
+        {callIsVideo ? (
+          <button
+            type="button"
+            onClick={toggleCallVideo}
+            className={`flex h-14 flex-col items-center justify-center gap-1 rounded-2xl border text-xs font-semibold transition ${
+              callVideoOff
+                ? "border-amber-300 bg-amber-100 text-amber-700 dark:border-amber-500/40 dark:bg-amber-500/15 dark:text-amber-100"
+                : "border-slate-200 bg-white text-slate-700 hover:border-emerald-300 hover:text-emerald-700 dark:border-white/10 dark:bg-slate-950 dark:text-slate-200 dark:hover:border-emerald-500/40 dark:hover:text-emerald-100"
+            }`}
+          >
+            {callVideoOff ? <VideoOff size={18} /> : <Video size={18} />}
+            {callVideoOff ? "Camera off" : "Camera"}
+          </button>
+        ) : (
+          <button
+            type="button"
+            onClick={() => remoteAudioRef.current?.play?.().catch(() => null)}
+            className="flex h-14 flex-col items-center justify-center gap-1 rounded-2xl border border-slate-200 bg-white text-xs font-semibold text-slate-700 transition hover:border-emerald-300 hover:text-emerald-700 dark:border-white/10 dark:bg-slate-950 dark:text-slate-200 dark:hover:border-emerald-500/40 dark:hover:text-emerald-100"
+          >
+            <Volume2 size={18} />
+            Audio
+          </button>
+        )}
         <button
           type="button"
           onClick={endActiveCall}
@@ -7358,7 +7540,7 @@ const peerStatusLabel = !activeHeaderPeer || activeHeaderPeer?.isDeleted
       <div className="px-6 py-4 text-center text-xs font-medium text-slate-500 dark:text-slate-400">
         {CALL_ICE_SERVERS.some((server) => String([].concat(server.urls || []).join(" ")).includes("turn:"))
           ? "Relay ready for strict mobile networks"
-          : "Add a TURN server for the most reliable mobile audio"}
+          : "Add a TURN server for the most reliable mobile calls"}
         <span className="mt-1 block">
           Keep this screen open during calls; BirdX will try to keep the display awake.
         </span>
@@ -7397,7 +7579,11 @@ const peerStatusLabel = !activeHeaderPeer || activeHeaderPeer?.isDeleted
           onClick={acceptIncomingCall}
           className="inline-flex items-center justify-center gap-2 rounded-2xl bg-emerald-500 px-4 py-3 text-sm font-semibold text-white shadow-lg shadow-emerald-500/25 transition hover:bg-emerald-600"
         >
-          <Phone size={17} strokeWidth={2.4} />
+          {incomingCallIsVideo ? (
+            <Video size={17} strokeWidth={2.4} />
+          ) : (
+            <Phone size={17} strokeWidth={2.4} />
+          )}
           Accept
         </button>
       </div>
