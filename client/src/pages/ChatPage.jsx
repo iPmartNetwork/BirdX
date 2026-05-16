@@ -48,8 +48,10 @@ import {
   Bookmark,
   Mic,
   MicOff,
+  Minus,
   Phone,
   PhoneOff,
+  Refresh,
   Video,
   VideoOff,
   Volume2,
@@ -422,9 +424,19 @@ const CALL_END_REASON_MESSAGES = {
 const CALL_RING_PATTERN = [0, 280, 520, 800, 1500];
 const CALL_RING_LOOP_MS = 2400;
 const FULLSCREEN_VIDEO_CONTROLS_HIDE_MS = 3200;
+const DEFAULT_CALL_CAMERA_FACING_MODE = "user";
 
 const normalizeCallType = (value) =>
   String(value || "voice").toLowerCase() === "video" ? "video" : "voice";
+
+const buildCallVideoConstraints = (
+  facingMode = DEFAULT_CALL_CAMERA_FACING_MODE,
+  exactFacingMode = false,
+) => ({
+  width: { ideal: 1280 },
+  height: { ideal: 720 },
+  facingMode: exactFacingMode ? { exact: facingMode } : { ideal: facingMode },
+});
 
 const formatCallDuration = (seconds) => {
   const total = Math.max(0, Number(seconds || 0));
@@ -530,6 +542,11 @@ export default function ChatPage({ user, setUser, isDark, setIsDark, toggleTheme
   const [remoteVideoActive, setRemoteVideoActive] = useState(false);
   const [fullscreenCallControlsVisible, setFullscreenCallControlsVisible] =
     useState(true);
+  const [fullscreenVideoMinimized, setFullscreenVideoMinimized] = useState(false);
+  const [callCameraFacingMode, setCallCameraFacingMode] = useState(
+    DEFAULT_CALL_CAMERA_FACING_MODE,
+  );
+  const [switchingCamera, setSwitchingCamera] = useState(false);
   const [callDurationSeconds, setCallDurationSeconds] = useState(0);
   const updateToastTimerRef = useRef(null);
   const copyToastTimerRef = useRef(null);
@@ -573,6 +590,7 @@ export default function ChatPage({ user, setUser, isDark, setIsDark, toggleTheme
   const remoteVideoRef = useRef(null);
   const callMutedRef = useRef(false);
   const callVideoOffRef = useRef(false);
+  const callCameraFacingModeRef = useRef(DEFAULT_CALL_CAMERA_FACING_MODE);
   const socketRef = useRef(null);
   const activeChatIdRef = useRef(null);
   const callStateRef = useRef(null);
@@ -744,6 +762,13 @@ export default function ChatPage({ user, setUser, isDark, setIsDark, toggleTheme
     });
   }
 
+  function resetCallCameraState() {
+    callCameraFacingModeRef.current = DEFAULT_CALL_CAMERA_FACING_MODE;
+    setCallCameraFacingMode(DEFAULT_CALL_CAMERA_FACING_MODE);
+    setSwitchingCamera(false);
+    setFullscreenVideoMinimized(false);
+  }
+
   function toggleCallMute() {
     setCallMuted((prev) => {
       const next = !prev;
@@ -760,6 +785,60 @@ export default function ChatPage({ user, setUser, isDark, setIsDark, toggleTheme
       syncLocalVideoMute(next);
       return next;
     });
+  }
+
+  async function switchCallCamera() {
+    if (normalizeCallType(callStateRef.current?.callType) !== "video") return;
+    if (typeof navigator === "undefined" || !navigator.mediaDevices?.getUserMedia) return;
+    const peer = peerRef.current;
+    const currentStream = localStreamRef.current;
+    const currentVideoTrack = currentStream?.getVideoTracks?.()?.[0] || null;
+    if (!peer || !currentStream || !currentVideoTrack) return;
+
+    const nextFacingMode =
+      callCameraFacingModeRef.current === "environment" ? "user" : "environment";
+    setSwitchingCamera(true);
+    showFullscreenCallControls(true);
+
+    let nextStream = null;
+    let nextVideoTrack = null;
+    try {
+      nextStream = await navigator.mediaDevices.getUserMedia({
+        audio: false,
+        video: buildCallVideoConstraints(nextFacingMode, true),
+      });
+      nextVideoTrack = nextStream.getVideoTracks?.()?.[0] || null;
+      if (!nextVideoTrack) {
+        throw new Error("No camera track was returned.");
+      }
+
+      const videoSender = peer
+        .getSenders?.()
+        ?.find((sender) => sender.track?.kind === "video");
+      if (!videoSender?.replaceTrack) {
+        throw new Error("Camera switching is not supported in this browser.");
+      }
+      await videoSender.replaceTrack(nextVideoTrack);
+
+      currentStream.removeTrack?.(currentVideoTrack);
+      currentStream.addTrack?.(nextVideoTrack);
+      currentVideoTrack.stop?.();
+      callCameraFacingModeRef.current = nextFacingMode;
+      setCallCameraFacingMode(nextFacingMode);
+      syncLocalVideoMute(callVideoOffRef.current);
+      syncCallVideoElements();
+    } catch (error) {
+      console.warn("Switch camera failed:", error);
+      nextVideoTrack?.stop?.();
+      nextStream?.getTracks?.().forEach((track) => {
+        if (track !== nextVideoTrack) track.stop?.();
+      });
+      updateCallStatus(callStateRef.current?.status || "connected", {
+        error: "Could not switch camera on this device.",
+      });
+    } finally {
+      setSwitchingCamera(false);
+    }
   }
 
   function getRingtoneAudioContext() {
@@ -940,6 +1019,7 @@ export default function ChatPage({ user, setUser, isDark, setIsDark, toggleTheme
     setCallVideoOff(false);
     setRemoteVideoActive(false);
     setFullscreenCallControlsVisible(true);
+    resetCallCameraState();
     setCallDurationSeconds(0);
     setSyncedIncomingCall(null);
     setSyncedCallState(null);
@@ -1097,11 +1177,7 @@ export default function ChatPage({ user, setUser, isDark, setIsDark, toggleTheme
         autoGainControl: true,
       },
       video: isVideoCall
-        ? {
-            width: { ideal: 1280 },
-            height: { ideal: 720 },
-            facingMode: "user",
-          }
+        ? buildCallVideoConstraints(callCameraFacingModeRef.current)
         : false,
     });
     localStreamRef.current = stream;
@@ -1204,6 +1280,7 @@ export default function ChatPage({ user, setUser, isDark, setIsDark, toggleTheme
     setSyncedCallState(nextState);
     callMutedRef.current = false;
     callVideoOffRef.current = false;
+    resetCallCameraState();
     setCallMuted(false);
     setCallVideoOff(false);
     setRemoteVideoActive(false);
@@ -1253,6 +1330,7 @@ export default function ChatPage({ user, setUser, isDark, setIsDark, toggleTheme
     });
     callMutedRef.current = false;
     callVideoOffRef.current = false;
+    resetCallCameraState();
     setCallMuted(false);
     setCallVideoOff(false);
     setRemoteVideoActive(false);
@@ -1359,12 +1437,18 @@ export default function ChatPage({ user, setUser, isDark, setIsDark, toggleTheme
 
   useEffect(() => {
     syncCallVideoElements();
-  }, [callState?.roomId, callState?.callType, callState?.status]);
+  }, [
+    callState?.roomId,
+    callState?.callType,
+    callState?.status,
+    fullscreenVideoMinimized,
+  ]);
 
   useEffect(() => {
     const isFullscreenVideo =
       normalizeCallType(callState?.callType) === "video" &&
-      (callState?.status === "connected" || callState?.status === "reconnecting");
+      (callState?.status === "connected" || callState?.status === "reconnecting") &&
+      !fullscreenVideoMinimized;
     if (!isFullscreenVideo) {
       clearFullscreenCallControlsTimer();
       setFullscreenCallControlsVisible(true);
@@ -1372,7 +1456,12 @@ export default function ChatPage({ user, setUser, isDark, setIsDark, toggleTheme
     }
     showFullscreenCallControls(true);
     return () => clearFullscreenCallControlsTimer();
-  }, [callState?.roomId, callState?.callType, callState?.status]);
+  }, [
+    callState?.roomId,
+    callState?.callType,
+    callState?.status,
+    fullscreenVideoMinimized,
+  ]);
 
   useEffect(() => {
     setReplyTarget(null);
@@ -6957,7 +7046,10 @@ const peerStatusLabel = !activeHeaderPeer || activeHeaderPeer?.isDeleted
   const callDurationLabel = formatCallDuration(callDurationSeconds);
   const callIsConnected =
     callState?.status === "connected" || callState?.status === "reconnecting";
-  const callIsFullscreenVideo = callIsVideo && callIsConnected;
+  const callIsFullscreenVideo =
+    callIsVideo && callIsConnected && !fullscreenVideoMinimized;
+  const callIsMinimizedVideo =
+    callIsVideo && callIsConnected && fullscreenVideoMinimized;
   const safeNewGroupForm = {
     nickname: String(newGroupForm?.nickname || ""),
     username: String(newGroupForm?.username || ""),
@@ -7453,7 +7545,44 @@ const peerStatusLabel = !activeHeaderPeer || activeHeaderPeer?.isDeleted
 ) : null}
 
 {callState ? (
-  callIsFullscreenVideo ? (
+  callIsMinimizedVideo ? (
+    <div className="fixed bottom-4 right-4 z-[300] w-40 overflow-hidden rounded-2xl border border-white/20 bg-slate-950 shadow-2xl shadow-black/40 sm:bottom-6 sm:right-6 sm:w-56">
+      <button
+        type="button"
+        onClick={() => {
+          setFullscreenVideoMinimized(false);
+          showFullscreenCallControls(true);
+        }}
+        className="relative block aspect-video w-full overflow-hidden bg-slate-950 text-left"
+        aria-label="Return to video call"
+        title="Return to video call"
+      >
+        <video
+          ref={remoteVideoRef}
+          className={`h-full w-full bg-slate-950 object-cover ${
+            remoteVideoActive ? "block" : "hidden"
+          }`}
+          autoPlay
+          playsInline
+          muted
+        />
+        {!remoteVideoActive ? (
+          <div className="absolute inset-0 flex items-center justify-center text-xs font-semibold text-white/70">
+            {callStatusLabel}
+          </div>
+        ) : null}
+      </button>
+      <button
+        type="button"
+        onClick={endActiveCall}
+        className="absolute bottom-2 right-2 inline-flex h-9 w-9 items-center justify-center rounded-full bg-rose-500 text-white shadow-lg shadow-black/30 transition hover:bg-rose-600"
+        aria-label="End call"
+        title="End call"
+      >
+        <PhoneOff size={17} strokeWidth={2.4} />
+      </button>
+    </div>
+  ) : callIsFullscreenVideo ? (
     <div
       className="fixed inset-0 z-[300] overflow-hidden bg-slate-950"
       onPointerDown={() => showFullscreenCallControls(true)}
@@ -7467,7 +7596,7 @@ const peerStatusLabel = !activeHeaderPeer || activeHeaderPeer?.isDeleted
         playsInline
         muted
       />
-      <div className="pointer-events-none absolute bottom-6 right-4 h-20 w-28 overflow-hidden rounded-2xl border border-white/20 bg-slate-900 shadow-2xl shadow-black/40 sm:bottom-6 sm:right-6 sm:h-32 sm:w-44">
+      <div className="pointer-events-none absolute bottom-28 right-4 h-20 w-28 overflow-hidden rounded-2xl border border-white/20 bg-slate-900 shadow-2xl shadow-black/40 sm:bottom-8 sm:right-6 sm:h-32 sm:w-44">
         {callVideoOff ? (
           <div className="flex h-full w-full items-center justify-center bg-slate-800 text-white">
             <VideoOff size={24} />
@@ -7483,25 +7612,92 @@ const peerStatusLabel = !activeHeaderPeer || activeHeaderPeer?.isDeleted
         )}
       </div>
       <div
-        className={`pointer-events-none absolute inset-x-0 bottom-0 flex justify-center bg-gradient-to-t from-black/70 via-black/30 to-transparent px-6 pb-8 pt-20 transition-opacity duration-300 ${
+        className={`pointer-events-none absolute inset-x-0 bottom-0 flex justify-center bg-gradient-to-t from-black/70 via-black/30 to-transparent px-4 pb-8 pt-20 transition-opacity duration-300 ${
           fullscreenCallControlsVisible ? "opacity-100" : "opacity-0"
         }`}
       >
-        <button
-          type="button"
-          onPointerDown={(event) => event.stopPropagation()}
-          onClick={(event) => {
-            event.stopPropagation();
-            endActiveCall();
-          }}
-          className={`inline-flex h-16 w-16 items-center justify-center rounded-full bg-rose-500 text-white shadow-2xl shadow-rose-950/40 transition hover:bg-rose-600 focus:outline-none focus:ring-4 focus:ring-rose-300/40 ${
+        <div
+          className={`flex max-w-full items-center justify-center gap-3 rounded-full bg-black/25 px-3 py-2 backdrop-blur-md ${
             fullscreenCallControlsVisible ? "pointer-events-auto" : "pointer-events-none"
           }`}
-          aria-label="End call"
-          title="End call"
+          onPointerDown={(event) => event.stopPropagation()}
         >
-          <PhoneOff size={26} strokeWidth={2.5} />
-        </button>
+          <button
+            type="button"
+            onClick={(event) => {
+              event.stopPropagation();
+              toggleCallMute();
+              showFullscreenCallControls(true);
+            }}
+            className={`inline-flex h-12 w-12 items-center justify-center rounded-full text-white shadow-xl transition focus:outline-none focus:ring-4 focus:ring-white/20 ${
+              callMuted ? "bg-amber-500 hover:bg-amber-600" : "bg-white/20 hover:bg-white/25"
+            }`}
+            aria-label={callMuted ? "Unmute microphone" : "Mute microphone"}
+            title={callMuted ? "Unmute microphone" : "Mute microphone"}
+          >
+            {callMuted ? <MicOff size={21} /> : <Mic size={21} />}
+          </button>
+          <button
+            type="button"
+            onClick={(event) => {
+              event.stopPropagation();
+              toggleCallVideo();
+              showFullscreenCallControls(true);
+            }}
+            className={`inline-flex h-12 w-12 items-center justify-center rounded-full text-white shadow-xl transition focus:outline-none focus:ring-4 focus:ring-white/20 ${
+              callVideoOff ? "bg-amber-500 hover:bg-amber-600" : "bg-white/20 hover:bg-white/25"
+            }`}
+            aria-label={callVideoOff ? "Turn camera on" : "Turn camera off"}
+            title={callVideoOff ? "Turn camera on" : "Turn camera off"}
+          >
+            {callVideoOff ? <VideoOff size={21} /> : <Video size={21} />}
+          </button>
+          <button
+            type="button"
+            onClick={(event) => {
+              event.stopPropagation();
+              void switchCallCamera();
+            }}
+            disabled={switchingCamera}
+            className="inline-flex h-12 w-12 items-center justify-center rounded-full bg-white/20 text-white shadow-xl transition hover:bg-white/25 focus:outline-none focus:ring-4 focus:ring-white/20 disabled:cursor-wait disabled:opacity-60"
+            aria-label="Switch camera"
+            title={
+              callCameraFacingMode === "environment"
+                ? "Switch to front camera"
+                : "Switch to rear camera"
+            }
+          >
+            <Refresh
+              size={21}
+              className={switchingCamera ? "animate-spin" : ""}
+              strokeWidth={2.4}
+            />
+          </button>
+          <button
+            type="button"
+            onClick={(event) => {
+              event.stopPropagation();
+              setFullscreenVideoMinimized(true);
+            }}
+            className="inline-flex h-12 w-12 items-center justify-center rounded-full bg-white/20 text-white shadow-xl transition hover:bg-white/25 focus:outline-none focus:ring-4 focus:ring-white/20"
+            aria-label="Minimize call"
+            title="Minimize call"
+          >
+            <Minus size={22} strokeWidth={2.4} />
+          </button>
+          <button
+            type="button"
+            onClick={(event) => {
+              event.stopPropagation();
+              endActiveCall();
+            }}
+            className="inline-flex h-14 w-14 items-center justify-center rounded-full bg-rose-500 text-white shadow-2xl shadow-rose-950/40 transition hover:bg-rose-600 focus:outline-none focus:ring-4 focus:ring-rose-300/40"
+            aria-label="End call"
+            title="End call"
+          >
+            <PhoneOff size={24} strokeWidth={2.5} />
+          </button>
+        </div>
       </div>
     </div>
   ) : (
