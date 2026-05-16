@@ -397,8 +397,24 @@ const CALL_STATUS_LABELS = {
   error: "Call failed",
 };
 
+const CALL_TYPE_LABELS = {
+  voice: "Voice",
+  video: "Video",
+};
+
+const CALL_END_REASON_MESSAGES = {
+  missed: "Call was not answered.",
+  timeout: "Call was not answered.",
+  disconnect_timeout: "Call ended after connection was lost.",
+  failed: "Call failed.",
+  rejected: "Call was rejected.",
+};
+
 const CALL_RING_PATTERN = [0, 280, 520, 800, 1500];
 const CALL_RING_LOOP_MS = 2400;
+
+const normalizeCallType = (value) =>
+  String(value || "voice").toLowerCase() === "video" ? "video" : "voice";
 
 const formatCallDuration = (seconds) => {
   const total = Math.max(0, Number(seconds || 0));
@@ -739,7 +755,8 @@ export default function ChatPage({ user, setUser, isDark, setIsDark, toggleTheme
     if (typeof window === "undefined" || !("Notification" in window)) return;
     if (Notification.permission !== "granted") return;
     const chatId = Number(payload?.chatId || String(payload?.roomId || "").replace(/^chat-/, ""));
-    const title = "Incoming voice call";
+    const callTypeLabel = CALL_TYPE_LABELS[normalizeCallType(payload?.callType)] || "Voice";
+    const title = `Incoming ${callTypeLabel.toLowerCase()} call`;
     const body = `${payload?.callerName || "Someone"} is calling...`;
     const options = {
       body,
@@ -1038,16 +1055,18 @@ export default function ChatPage({ user, setUser, isDark, setIsDark, toggleTheme
     return peer;
   }
 
-  async function startOutgoingCall() {
+  async function startOutgoingCall(callType = "voice") {
     const chatId = Number(activeChatIdRef.current || activeChatId || 0);
     if (!chatId || callStateRef.current) return;
 
     const socket = socketRef.current;
     const roomId = `chat-${chatId}`;
+    const normalizedCallType = normalizeCallType(callType);
     const peerName = activeFallbackTitle || activeHeaderAvatar?.nickname || "Contact";
     const nextState = {
       roomId,
       chatId,
+      callType: normalizedCallType,
       isCaller: true,
       status: "preparing",
       peerName,
@@ -1068,6 +1087,7 @@ export default function ChatPage({ user, setUser, isDark, setIsDark, toggleTheme
       socket.emit("call-user", {
         roomId,
         chatId,
+        callType: normalizedCallType,
         callerUserId: user?.id || null,
         callerUsername: user?.username || "",
         callerName: user?.nickname || user?.username || "Someone",
@@ -1093,6 +1113,7 @@ export default function ChatPage({ user, setUser, isDark, setIsDark, toggleTheme
     setSyncedCallState({
       roomId,
       chatId: Number(String(roomId).replace(/^chat-/, "")) || null,
+      callType: normalizeCallType(payload?.callType),
       isCaller: false,
       status: "connecting",
       peerName: payload?.callerName || "Caller",
@@ -1250,15 +1271,18 @@ export default function ChatPage({ user, setUser, isDark, setIsDark, toggleTheme
       setSyncedIncomingCall({
         ...payload,
         chatId: Number(payload?.chatId || String(payload.roomId).replace(/^chat-/, "")) || null,
+        callType: normalizeCallType(payload?.callType),
         status: "ringing",
       });
     });
 
     socket.on("call-ended", (payload) => {
       const roomId = payload?.roomId;
+      const reason = String(payload?.reason || "").toLowerCase();
+      const endMessage = CALL_END_REASON_MESSAGES[reason] || "";
       if (!roomId || callStateRef.current?.roomId === roomId) {
-        updateCallStatus("ended");
-        scheduleCallReset(900);
+        updateCallStatus("ended", endMessage ? { error: endMessage } : {});
+        scheduleCallReset(endMessage ? 1800 : 900);
       }
       if (incomingCallRef.current?.roomId === roomId) {
         stopIncomingRingtone();
@@ -6768,6 +6792,8 @@ const peerStatusLabel = !activeHeaderPeer || activeHeaderPeer?.isDeleted
   const callStatusLabel =
     CALL_STATUS_LABELS[callState?.status] || CALL_STATUS_LABELS.connecting;
   const callPeerName = callState?.peerName || activeFallbackTitle || "Contact";
+  const callTypeLabel =
+    CALL_TYPE_LABELS[normalizeCallType(callState?.callType)] || CALL_TYPE_LABELS.voice;
   const callDurationLabel = formatCallDuration(callDurationSeconds);
   const callIsConnected =
     callState?.status === "connected" || callState?.status === "reconnecting";
@@ -7275,6 +7301,9 @@ const peerStatusLabel = !activeHeaderPeer || activeHeaderPeer?.isDeleted
         <h2 className="relative mt-4 truncate text-xl font-bold" title={callPeerName}>
           {callPeerName}
         </h2>
+        <p className="relative mt-1 text-xs font-semibold uppercase tracking-wide text-emerald-600 dark:text-emerald-300">
+          {callTypeLabel} call
+        </p>
         <div className="relative mt-2 flex items-center justify-center gap-2 text-sm text-slate-500 dark:text-slate-400">
           <span
             className={`h-2.5 w-2.5 rounded-full ${
@@ -7346,7 +7375,7 @@ const peerStatusLabel = !activeHeaderPeer || activeHeaderPeer?.isDeleted
       </div>
 
       <h2 className="mt-4 text-xl font-bold text-slate-900 dark:text-white">
-        Incoming Call
+        Incoming {CALL_TYPE_LABELS[normalizeCallType(incomingCall.callType)] || "Voice"} Call
       </h2>
 
       <p className="mt-2 text-sm text-slate-500 dark:text-slate-400">
