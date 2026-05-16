@@ -6919,6 +6919,7 @@ const peerStatusLabel = !activeHeaderPeer || activeHeaderPeer?.isDeleted
   const callDurationLabel = formatCallDuration(callDurationSeconds);
   const callIsConnected =
     callState?.status === "connected" || callState?.status === "reconnecting";
+  const callIsFullscreenVideo = callIsVideo && callIsConnected;
   const safeNewGroupForm = {
     nickname: String(newGroupForm?.nickname || ""),
     username: String(newGroupForm?.username || ""),
@@ -7414,6 +7415,30 @@ const peerStatusLabel = !activeHeaderPeer || activeHeaderPeer?.isDeleted
 ) : null}
 
 {callState ? (
+  callIsFullscreenVideo ? (
+    <div className="fixed inset-0 z-[300] overflow-hidden bg-slate-950">
+      <video
+        ref={remoteVideoRef}
+        className={`h-full w-full bg-slate-950 object-cover ${
+          remoteVideoActive ? "block" : "hidden"
+        }`}
+        autoPlay
+        playsInline
+        muted
+      />
+      <div className="pointer-events-none absolute inset-x-0 bottom-0 flex justify-center bg-gradient-to-t from-black/70 via-black/30 to-transparent px-6 pb-8 pt-20">
+        <button
+          type="button"
+          onClick={endActiveCall}
+          className="pointer-events-auto inline-flex h-16 w-16 items-center justify-center rounded-full bg-rose-500 text-white shadow-2xl shadow-rose-950/40 transition hover:bg-rose-600 focus:outline-none focus:ring-4 focus:ring-rose-300/40"
+          aria-label="End call"
+          title="End call"
+        >
+          <PhoneOff size={26} strokeWidth={2.5} />
+        </button>
+      </div>
+    </div>
+  ) : (
   <div className="fixed inset-0 z-[300] flex items-center justify-center bg-slate-950/75 px-4 py-6 backdrop-blur-sm">
     <div
       className={`w-full overflow-hidden rounded-[2rem] border border-white/10 bg-white shadow-2xl dark:bg-slate-950 ${
@@ -7547,6 +7572,7 @@ const peerStatusLabel = !activeHeaderPeer || activeHeaderPeer?.isDeleted
       </div>
     </div>
   </div>
+  )
 ) : null}
 
 {incomingCall ? (
