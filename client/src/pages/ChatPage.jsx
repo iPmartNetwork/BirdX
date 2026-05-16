@@ -421,6 +421,7 @@ const CALL_END_REASON_MESSAGES = {
 
 const CALL_RING_PATTERN = [0, 280, 520, 800, 1500];
 const CALL_RING_LOOP_MS = 2400;
+const FULLSCREEN_VIDEO_CONTROLS_HIDE_MS = 3200;
 
 const normalizeCallType = (value) =>
   String(value || "voice").toLowerCase() === "video" ? "video" : "voice";
@@ -527,6 +528,8 @@ export default function ChatPage({ user, setUser, isDark, setIsDark, toggleTheme
   const [callMuted, setCallMuted] = useState(false);
   const [callVideoOff, setCallVideoOff] = useState(false);
   const [remoteVideoActive, setRemoteVideoActive] = useState(false);
+  const [fullscreenCallControlsVisible, setFullscreenCallControlsVisible] =
+    useState(true);
   const [callDurationSeconds, setCallDurationSeconds] = useState(0);
   const updateToastTimerRef = useRef(null);
   const copyToastTimerRef = useRef(null);
@@ -580,6 +583,7 @@ export default function ChatPage({ user, setUser, isDark, setIsDark, toggleTheme
   const pendingAnswerRef = useRef(null);
   const pendingIceCandidatesRef = useRef([]);
   const callResetTimerRef = useRef(null);
+  const fullscreenCallControlsTimerRef = useRef(null);
   const ringtoneAudioContextRef = useRef(null);
   const ringtoneTimersRef = useRef([]);
   const ringtoneActiveRef = useRef(false);
@@ -639,6 +643,25 @@ export default function ChatPage({ user, setUser, isDark, setIsDark, toggleTheme
     attachVideoElement(remoteVideoRef.current, isVideoCall ? remoteStreamRef.current : null, {
       muted: true,
     });
+  }
+
+  function clearFullscreenCallControlsTimer() {
+    if (!fullscreenCallControlsTimerRef.current || typeof window === "undefined") {
+      fullscreenCallControlsTimerRef.current = null;
+      return;
+    }
+    window.clearTimeout(fullscreenCallControlsTimerRef.current);
+    fullscreenCallControlsTimerRef.current = null;
+  }
+
+  function showFullscreenCallControls(autoHide = true) {
+    setFullscreenCallControlsVisible(true);
+    clearFullscreenCallControlsTimer();
+    if (!autoHide || typeof window === "undefined") return;
+    fullscreenCallControlsTimerRef.current = window.setTimeout(() => {
+      fullscreenCallControlsTimerRef.current = null;
+      setFullscreenCallControlsVisible(false);
+    }, FULLSCREEN_VIDEO_CONTROLS_HIDE_MS);
   }
 
   async function requestCallWakeLock() {
@@ -905,6 +928,7 @@ export default function ChatPage({ user, setUser, isDark, setIsDark, toggleTheme
       window.clearTimeout(callResetTimerRef.current);
       callResetTimerRef.current = null;
     }
+    clearFullscreenCallControlsTimer();
     cleanupCallMedia();
     stopIncomingRingtone();
     pendingOfferRef.current = null;
@@ -915,6 +939,7 @@ export default function ChatPage({ user, setUser, isDark, setIsDark, toggleTheme
     setCallMuted(false);
     setCallVideoOff(false);
     setRemoteVideoActive(false);
+    setFullscreenCallControlsVisible(true);
     setCallDurationSeconds(0);
     setSyncedIncomingCall(null);
     setSyncedCallState(null);
@@ -1334,6 +1359,19 @@ export default function ChatPage({ user, setUser, isDark, setIsDark, toggleTheme
 
   useEffect(() => {
     syncCallVideoElements();
+  }, [callState?.roomId, callState?.callType, callState?.status]);
+
+  useEffect(() => {
+    const isFullscreenVideo =
+      normalizeCallType(callState?.callType) === "video" &&
+      (callState?.status === "connected" || callState?.status === "reconnecting");
+    if (!isFullscreenVideo) {
+      clearFullscreenCallControlsTimer();
+      setFullscreenCallControlsVisible(true);
+      return undefined;
+    }
+    showFullscreenCallControls(true);
+    return () => clearFullscreenCallControlsTimer();
   }, [callState?.roomId, callState?.callType, callState?.status]);
 
   useEffect(() => {
@@ -7416,7 +7454,10 @@ const peerStatusLabel = !activeHeaderPeer || activeHeaderPeer?.isDeleted
 
 {callState ? (
   callIsFullscreenVideo ? (
-    <div className="fixed inset-0 z-[300] overflow-hidden bg-slate-950">
+    <div
+      className="fixed inset-0 z-[300] overflow-hidden bg-slate-950"
+      onPointerDown={() => showFullscreenCallControls(true)}
+    >
       <video
         ref={remoteVideoRef}
         className={`h-full w-full bg-slate-950 object-cover ${
@@ -7426,11 +7467,36 @@ const peerStatusLabel = !activeHeaderPeer || activeHeaderPeer?.isDeleted
         playsInline
         muted
       />
-      <div className="pointer-events-none absolute inset-x-0 bottom-0 flex justify-center bg-gradient-to-t from-black/70 via-black/30 to-transparent px-6 pb-8 pt-20">
+      <div className="pointer-events-none absolute bottom-6 right-4 h-20 w-28 overflow-hidden rounded-2xl border border-white/20 bg-slate-900 shadow-2xl shadow-black/40 sm:bottom-6 sm:right-6 sm:h-32 sm:w-44">
+        {callVideoOff ? (
+          <div className="flex h-full w-full items-center justify-center bg-slate-800 text-white">
+            <VideoOff size={24} />
+          </div>
+        ) : (
+          <video
+            ref={localVideoRef}
+            className="h-full w-full bg-slate-900 object-cover"
+            autoPlay
+            playsInline
+            muted
+          />
+        )}
+      </div>
+      <div
+        className={`pointer-events-none absolute inset-x-0 bottom-0 flex justify-center bg-gradient-to-t from-black/70 via-black/30 to-transparent px-6 pb-8 pt-20 transition-opacity duration-300 ${
+          fullscreenCallControlsVisible ? "opacity-100" : "opacity-0"
+        }`}
+      >
         <button
           type="button"
-          onClick={endActiveCall}
-          className="pointer-events-auto inline-flex h-16 w-16 items-center justify-center rounded-full bg-rose-500 text-white shadow-2xl shadow-rose-950/40 transition hover:bg-rose-600 focus:outline-none focus:ring-4 focus:ring-rose-300/40"
+          onPointerDown={(event) => event.stopPropagation()}
+          onClick={(event) => {
+            event.stopPropagation();
+            endActiveCall();
+          }}
+          className={`inline-flex h-16 w-16 items-center justify-center rounded-full bg-rose-500 text-white shadow-2xl shadow-rose-950/40 transition hover:bg-rose-600 focus:outline-none focus:ring-4 focus:ring-rose-300/40 ${
+            fullscreenCallControlsVisible ? "pointer-events-auto" : "pointer-events-none"
+          }`}
           aria-label="End call"
           title="End call"
         >
