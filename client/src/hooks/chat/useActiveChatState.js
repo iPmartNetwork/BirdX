@@ -1,5 +1,19 @@
 import { useEffect, useMemo } from "react";
 
+const isPinnedChat = (chat) =>
+  Boolean(Number(chat?.required_channel || chat?.requiredChannel || 0));
+
+const compareChats = (a, b) => {
+  const pinDiff = Number(isPinnedChat(b)) - Number(isPinnedChat(a));
+  if (pinDiff) return pinDiff;
+  const aTime = a?.last_time ? new Date(a.last_time).getTime() : 0;
+  const bTime = b?.last_time ? new Date(b.last_time).getTime() : 0;
+  if (bTime !== aTime) return bTime - aTime;
+  return Number(b?.id || 0) - Number(a?.id || 0);
+};
+
+const sortChats = (items = []) => [...items].sort(compareChats);
+
 export function useActiveChatState({
   chats,
   chatsSearchQuery,
@@ -18,8 +32,8 @@ export function useActiveChatState({
     const query = String(chatsSearchQuery || "")
       .trim()
       .toLowerCase();
-    if (!query) return chats;
-    return chats.filter((chat) => {
+    if (!query) return sortChats(chats);
+    return sortChats(chats.filter((chat) => {
       const members = Array.isArray(chat?.members) ? chat.members : [];
       const chatType = String(chat?.type || "").toLowerCase();
       if (chatType === "group" || chatType === "channel") {
@@ -39,7 +53,7 @@ export function useActiveChatState({
       const nickname = String(other?.nickname || "").toLowerCase();
       const username = String(other?.username || "").toLowerCase();
       return nickname.includes(query) || username.includes(query);
-    });
+    }));
   }, [chats, chatsSearchQuery, user?.username]);
 
   const activeChat =
@@ -52,7 +66,7 @@ export function useActiveChatState({
 
   const activeMembers = useMemo(
     () => (Array.isArray(activeChat?.members) ? activeChat.members : []),
-    [activeChat?.members],
+    [activeChat],
   );
   const isActiveGroupChat = activeChat?.type === "group";
   const isActiveChannelChat = activeChat?.type === "channel";
