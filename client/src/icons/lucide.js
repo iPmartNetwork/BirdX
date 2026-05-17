@@ -39,6 +39,7 @@ export {
   Phone,
   PhoneCall,
   PhoneOff,
+  Pin,
   Play,
   Plus,
   RefreshCcw as Refresh,
