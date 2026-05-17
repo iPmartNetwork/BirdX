@@ -9,13 +9,19 @@ export function createUploadTools({
   uploadRootDir,
   avatarUploadRootDir,
   fileUploadMaxSize,
+  fileUploadHardMaxSize,
   fileUploadMaxFiles,
   fileUploadMaxTotalSize,
   storageEncryption,
 }) {
+  const normalizedHardMaxSize = Math.max(
+    Number(fileUploadMaxSize || 0),
+    Number(fileUploadHardMaxSize || 0),
+  );
   const MESSAGE_FILE_LIMITS = {
     maxFiles: fileUploadMaxFiles,
     maxFileSizeBytes: fileUploadMaxSize,
+    maxHardFileSizeBytes: normalizedHardMaxSize || fileUploadMaxSize,
     maxTotalBytes: fileUploadMaxTotalSize,
   };
 
@@ -86,7 +92,7 @@ export function createUploadTools({
   const uploadFiles = multer({
     storage: uploadStorage,
     limits: {
-      fileSize: MESSAGE_FILE_LIMITS.maxFileSizeBytes,
+      fileSize: MESSAGE_FILE_LIMITS.maxHardFileSizeBytes,
       files: MESSAGE_FILE_LIMITS.maxFiles,
     },
   });
