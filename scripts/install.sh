@@ -779,14 +779,15 @@ install_required_packages() {
       -o Dir::Etc::sourceparts=- <<EOF
 deb ${MIRROR_APT_EXTRA} ${codename} main restricted universe multiverse
 EOF
+    [[ "$?" -eq 0 ]] || fail "Failed to refresh apt package index from mirror."
   else
     log "Refreshing apt package index..."
-    run_silent run_as_root apt-get update
+    run_silent run_as_root apt-get update || fail "Failed to refresh apt package index."
   fi
 
   if (( ${#missing_pkgs[@]} > 0 )); then
     log "Installing missing packages: ${missing_pkgs[*]}"
-    run_silent run_as_root apt-get install -y --allow-downgrades "${missing_pkgs[@]}"
+    run_silent run_as_root apt-get install -y --allow-downgrades "${missing_pkgs[@]}" || fail "Failed to install required packages."
   else
     log "All required base packages are already installed."
   fi
@@ -1127,22 +1128,19 @@ update_source_from_zip() {
 }
 
 install_birdx_dependencies() {
-  log "Installing server dependencies..."
+  local npm_registry_arg=""
   if [[ -n "$MIRROR_NPM" ]]; then
-    run_in_install_dir "npm --prefix server --registry "$MIRROR_NPM" install"
-  else
-    run_in_install_dir "npm --prefix server install"
+    npm_registry_arg="--registry $(printf "%q" "$MIRROR_NPM")"
   fi
+
+  log "Installing server dependencies..."
+  run_in_install_dir "npm --prefix server ${npm_registry_arg} install" || fail "Failed to install server dependencies."
 
   log "Installing client dependencies..."
-  if [[ -n "$MIRROR_NPM" ]]; then
-    run_in_install_dir "npm --prefix client --registry "$MIRROR_NPM" install"
-  else
-    run_in_install_dir "npm --prefix client install"
-  fi
+  run_in_install_dir "npm --prefix client ${npm_registry_arg} install" || fail "Failed to install client dependencies."
 
   log "Building client..."
-  run_in_install_dir "npm --prefix client run build"
+  run_in_install_dir "npm --prefix client run build" || fail "Failed to build client assets."
 }
 
 get_existing_env_value() {
@@ -1510,6 +1508,40 @@ apply_ownership() {
   run_silent run_as_root git config --global --add safe.directory "$INSTALL_DIR"
 }
 
+ensure_runtime_layout() {
+  log "Preparing runtime files and directories..."
+  run_silent run_as_root mkdir -p \
+    "$INSTALL_DIR/data/uploads/messages" \
+    "$INSTALL_DIR/data/uploads/avatars" \
+    "$INSTALL_DIR/data/backups" \
+    "$INSTALL_DIR/logs" || fail "Failed to create BirdX runtime directories."
+
+  run_silent run_as_root test -f "$INSTALL_DIR/server/index.js" || fail "Missing server entry file: ${INSTALL_DIR}/server/index.js"
+  run_silent run_as_root test -d "$INSTALL_DIR/server/node_modules/express" || fail "Server dependencies are missing. Run npm --prefix ${INSTALL_DIR}/server install."
+  run_silent run_as_root test -f "$INSTALL_DIR/client/dist/index.html" || fail "Client build is missing. Run npm --prefix ${INSTALL_DIR}/client run build."
+  run_silent run_as_root chown -R "${SERVICE_USER}:${SERVICE_GROUP}" "$INSTALL_DIR/data" "$INSTALL_DIR/logs" || fail "Failed to set BirdX runtime ownership."
+}
+
+wait_for_birdx_service() {
+  sync_values_from_env
+  local attempt
+  local health_url="http://127.0.0.1:${SERVER_PORT}/"
+
+  log "Checking BirdX backend at ${health_url}..."
+  for attempt in {1..30}; do
+    if run_as_root_output curl -fsS --max-time 2 "$health_url" >/dev/null 2>&1; then
+      log "BirdX backend is responding on port ${SERVER_PORT}."
+      return 0
+    fi
+    sleep 1
+  done
+
+  warn "BirdX backend did not respond on port ${SERVER_PORT}."
+  run_as_root systemctl status birdx.service --no-pager -l || true
+  run_as_root journalctl -u birdx.service --no-pager -n 80 || true
+  fail "BirdX backend is not ready; nginx would return 502 Bad Gateway."
+}
+
 configure_systemd_service() {
   log "Creating systemd service at ${SERVICE_FILE}..."
   [[ -n "$NODE_EXEC_PATH" ]] || resolve_node_exec_path
@@ -1523,6 +1555,8 @@ Type=simple
 User=${SERVICE_USER}
 Group=${SERVICE_GROUP}
 WorkingDirectory=${INSTALL_DIR}/server
+Environment=NODE_ENV=production
+EnvironmentFile=${INSTALL_DIR}/.env
 ExecStart=${NODE_EXEC_PATH} ${INSTALL_DIR}/server/index.js
 Restart=on-failure
 RestartSec=5
@@ -1534,6 +1568,7 @@ EOF
   run_as_root systemctl daemon-reload
   run_as_root systemctl enable --now birdx.service
   run_as_root systemctl restart birdx.service
+  wait_for_birdx_service
 }
 
 write_nginx_site_config() {
@@ -1632,6 +1667,21 @@ ${acme_block}
     proxy_buffering off;
     proxy_cache off;
     add_header X-Accel-Buffering no;
+  }
+
+  location /socket.io/ {
+    proxy_pass http://127.0.0.1:${SERVER_PORT};
+    proxy_http_version 1.1;
+    proxy_set_header Upgrade \$http_upgrade;
+    proxy_set_header Connection "upgrade";
+    proxy_set_header Host \$host;
+    proxy_set_header X-Real-IP \$remote_addr;
+    proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
+    proxy_set_header X-Forwarded-Proto \$scheme;
+    proxy_read_timeout 1h;
+    proxy_send_timeout 1h;
+    proxy_buffering off;
+    proxy_cache_bypass \$http_upgrade;
   }
 
   location / {
@@ -1969,10 +2019,12 @@ rebuild_and_restart_after_settings_change() {
   local needs_nginx="${1:-no}"
   sync_values_from_env
   log "Rebuilding client after settings change..."
-  run_in_install_dir "npm --prefix client run build"
+  run_in_install_dir "npm --prefix client run build" || fail "Failed to rebuild client assets."
+  ensure_runtime_layout
 
   log "Restarting BirdX service..."
   run_as_root systemctl restart birdx.service
+  wait_for_birdx_service
 
   if [[ "$needs_nginx" == "yes" ]]; then
     log "Updating Nginx config for SERVER_PORT/CLIENT_PORT/MAX_UPLOAD changes..."
@@ -2021,6 +2073,7 @@ update_birdx() {
 
     log "Installing dependencies..."
     install_birdx_dependencies
+    ensure_runtime_layout
     ensure_vapid_keys
 
     log "Synchronizing database schema with latest version..."
@@ -2030,6 +2083,7 @@ update_birdx() {
 
     log "Restarting BirdX service..."
     run_as_root systemctl restart birdx.service
+    wait_for_birdx_service
     run_as_root systemctl reload nginx
 
     log "Update completed successfully."
@@ -2090,6 +2144,7 @@ update_birdx() {
 
   log "Installing dependencies..."
   install_birdx_dependencies
+  ensure_runtime_layout
   ensure_vapid_keys
   
   log "Synchronizing database schema with latest version..."
@@ -2099,6 +2154,7 @@ update_birdx() {
 
   log "Restarting BirdX service..."
   run_as_root systemctl restart birdx.service
+  wait_for_birdx_service
   run_as_root systemctl reload nginx
 
   log "Update completed successfully."
@@ -2107,7 +2163,9 @@ update_birdx() {
 
 restart_birdx() {
   log "Restarting BirdX service..."
+  sync_values_from_env
   run_as_root systemctl restart birdx.service
+  wait_for_birdx_service
   run_as_root systemctl reload nginx
 
   log "BirdX restarted successfully."
@@ -2241,6 +2299,7 @@ install_birdx() {
   fi
   RESTORE_BACKUP_QUIET="no"
   install_birdx_dependencies
+  ensure_runtime_layout
   ensure_vapid_keys
   apply_ownership
   configure_systemd_service
