@@ -1758,7 +1758,7 @@ ensure_runtime_layout() {
 wait_for_birdx_service() {
   sync_values_from_env
   local attempt
-  local health_url="http://127.0.0.1:${SERVER_PORT}/"
+  local health_url="http://127.0.0.1:${SERVER_PORT}/api/health"
 
   log "Checking BirdX backend at ${health_url}..."
   for attempt in {1..30}; do
