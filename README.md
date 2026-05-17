@@ -149,7 +149,7 @@ APP_DEBUG=false
 
 # Auth
 ACCOUNT_CREATION=true
-ADMIN_USERNAMES=ipmart
+ADMIN_USERNAMES=admin123
 
 # File Upload
 FILE_UPLOAD=true
