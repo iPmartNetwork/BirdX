@@ -1518,6 +1518,7 @@ ensure_runtime_layout() {
 
   run_silent run_as_root test -f "$INSTALL_DIR/server/index.js" || fail "Missing server entry file: ${INSTALL_DIR}/server/index.js"
   run_silent run_as_root test -d "$INSTALL_DIR/server/node_modules/express" || fail "Server dependencies are missing. Run npm --prefix ${INSTALL_DIR}/server install."
+  run_silent run_as_root test -d "$INSTALL_DIR/server/node_modules/socket.io" || fail "Socket.IO dependency is missing. Run npm --prefix ${INSTALL_DIR}/server install."
   run_silent run_as_root test -f "$INSTALL_DIR/client/dist/index.html" || fail "Client build is missing. Run npm --prefix ${INSTALL_DIR}/client run build."
   run_silent run_as_root chown -R "${SERVICE_USER}:${SERVICE_GROUP}" "$INSTALL_DIR/data" "$INSTALL_DIR/logs" || fail "Failed to set BirdX runtime ownership."
 }
