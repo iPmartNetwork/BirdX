@@ -401,6 +401,195 @@ prompt_text_retention_days() {
   done
 }
 
+is_ipv4_address() {
+  local value="$1"
+  [[ "$value" =~ ^([0-9]{1,3}\.){3}[0-9]{1,3}$ ]]
+}
+
+detect_public_ip() {
+  if ! have_cmd curl; then
+    return 1
+  fi
+
+  local endpoint=""
+  local ip=""
+  for endpoint in "https://api.ipify.org" "https://ifconfig.me/ip"; do
+    ip="$(curl -fsS --max-time 4 "$endpoint" 2>/dev/null | tr -d '[:space:]')" || ip=""
+    if is_ipv4_address "$ip"; then
+      printf "%s" "$ip"
+      return 0
+    fi
+  done
+
+  return 1
+}
+
+normalize_turn_host_input() {
+  local value="$1"
+  value="${value#"${value%%[![:space:]]*}"}"
+  value="${value%"${value##*[![:space:]]}"}"
+  value="${value#turn:}"
+  value="${value#turns:}"
+  value="${value#http://}"
+  value="${value#https://}"
+  value="${value%%/*}"
+  value="${value%%\?*}"
+  if [[ "$value" == *":3478" ]]; then
+    value="${value%:3478}"
+  fi
+  printf "%s" "$value"
+}
+
+prompt_turn_host() {
+  local default_host="${1:-}"
+  local value=""
+  while true; do
+    if [[ -n "$default_host" ]]; then
+      prompt_read "Enter TURN hostname or public IPv4 (default: $default_host): " value
+      if [[ -z "$value" ]]; then
+        value="$default_host"
+      fi
+    else
+      prompt_read "Enter TURN hostname or public IPv4: " value
+    fi
+
+    value="$(normalize_turn_host_input "$value")"
+    if [[ "$value" =~ ^[A-Za-z0-9._-]+$ ]]; then
+      printf "%s" "$value"
+      return 0
+    fi
+    printf "Use a hostname or public IPv4 address without protocol, path, or port.\n"
+  done
+}
+
+generate_turn_credential() {
+  local secret=""
+  secret="$(LC_ALL=C tr -dc 'A-Za-z0-9' </dev/urandom | head -c 32 || true)"
+  if (( ${#secret} < 32 )) && have_cmd openssl; then
+    secret="$(openssl rand -base64 32 2>/dev/null | tr '+/' '-_' | tr -d '=[:space:]' | head -c 32 || true)"
+  fi
+  if (( ${#secret} < 32 )); then
+    secret="$(date +%s%N | sha256sum | awk '{print $1}' | head -c 32)"
+  fi
+  printf "%s" "$secret"
+}
+
+build_turn_urls() {
+  local host="$1"
+  printf "turn:%s:3478?transport=udp turn:%s:3478?transport=tcp" "$host" "$host"
+}
+
+prompt_turn_options() {
+  TURN_ENABLED="false"
+  TURN_HOST=""
+  TURN_PUBLIC_IP=""
+  TURN_REALM=""
+  TURN_USERNAME="birdx"
+  TURN_CREDENTIAL=""
+  TURN_URLS=""
+
+  if [[ "$(prompt_yes_no "Install and configure coturn TURN server for reliable voice calls?" "yes")" != "yes" ]]; then
+    return 0
+  fi
+
+  local default_host=""
+  if (( ${#DOMAIN_NAMES[@]} > 0 )); then
+    default_host="${DOMAIN_NAMES[0]}"
+  elif [[ -n "$CERTBOT_IP_ADDRESS" ]]; then
+    default_host="$CERTBOT_IP_ADDRESS"
+  else
+    default_host="$(detect_public_ip || true)"
+  fi
+
+  TURN_ENABLED="true"
+  TURN_HOST="$(prompt_turn_host "$default_host")"
+  TURN_REALM="$TURN_HOST"
+  TURN_CREDENTIAL="$(generate_turn_credential)"
+  TURN_URLS="$(build_turn_urls "$TURN_HOST")"
+
+  if is_ipv4_address "$TURN_HOST"; then
+    TURN_PUBLIC_IP="$TURN_HOST"
+  else
+    TURN_PUBLIC_IP="$(detect_public_ip || true)"
+  fi
+
+  log "TURN will be configured for ${TURN_HOST} with username ${TURN_USERNAME}."
+}
+
+apply_turn_env_settings() {
+  local env_file="${1:-$INSTALL_DIR/.env}"
+  if [[ "$TURN_ENABLED" != "true" ]]; then
+    return 0
+  fi
+  if [[ -z "$TURN_URLS" || -z "$TURN_USERNAME" || -z "$TURN_CREDENTIAL" ]]; then
+    fail "TURN is enabled, but TURN environment values are incomplete."
+  fi
+
+  replace_env_value "$env_file" "APP_TURN_URLS" "$TURN_URLS"
+  replace_env_value "$env_file" "APP_TURN_USERNAME" "$TURN_USERNAME"
+  replace_env_value "$env_file" "APP_TURN_CREDENTIAL" "$TURN_CREDENTIAL"
+}
+
+log_turn_firewall_hint() {
+  log "TURN firewall ports to allow: 3478 TCP, 3478 UDP, and ${TURN_MIN_PORT}-${TURN_MAX_PORT} UDP."
+}
+
+configure_turn_server() {
+  if [[ "$TURN_ENABLED" != "true" ]]; then
+    return 0
+  fi
+
+  if ! dpkg -s coturn >/dev/null 2>&1; then
+    fail "coturn is not installed. Re-run installation so required packages can be installed."
+  fi
+
+  local external_ip_line=""
+  if [[ -z "$TURN_PUBLIC_IP" && ! is_ipv4_address "$TURN_HOST" ]]; then
+    TURN_PUBLIC_IP="$(detect_public_ip || true)"
+  fi
+  if [[ -n "$TURN_PUBLIC_IP" ]]; then
+    external_ip_line="external-ip=${TURN_PUBLIC_IP}"
+  fi
+
+  log "Writing coturn config to ${TURN_CONFIG_FILE}..."
+  run_silent run_as_root tee "$TURN_CONFIG_FILE" >/dev/null <<EOF
+# Managed by BirdX installer.
+listening-port=3478
+fingerprint
+lt-cred-mech
+realm=${TURN_REALM}
+server-name=${TURN_REALM}
+user=${TURN_USERNAME}:${TURN_CREDENTIAL}
+total-quota=100
+stale-nonce=600
+no-loopback-peers
+no-multicast-peers
+no-cli
+min-port=${TURN_MIN_PORT}
+max-port=${TURN_MAX_PORT}
+${external_ip_line}
+syslog
+EOF
+
+  log "Enabling coturn startup in ${TURN_DEFAULT_FILE}..."
+  run_silent run_as_root tee "$TURN_DEFAULT_FILE" >/dev/null <<'EOF'
+TURNSERVER_ENABLED=1
+EOF
+
+  local turn_service="coturn.service"
+  if run_as_root systemctl list-unit-files | grep -q '^coturn\.service'; then
+    turn_service="coturn.service"
+  elif run_as_root systemctl list-unit-files | grep -q '^turnserver\.service'; then
+    turn_service="turnserver.service"
+  fi
+
+  run_silent run_as_root systemctl daemon-reload
+  run_silent run_as_root systemctl enable "$turn_service" || fail "Failed to enable ${turn_service}."
+  run_silent run_as_root systemctl restart "$turn_service" || fail "Failed to start ${turn_service}."
+  log "coturn is running as ${turn_service}."
+  log_turn_firewall_hint
+}
+
 normalize_path_input() {
   local value="$1"
   if [[ "$value" == "~"* ]]; then
@@ -770,6 +959,9 @@ install_required_packages() {
     zip
     unzip
   )
+  if [[ "$TURN_ENABLED" == "true" ]]; then
+    required_pkgs+=(coturn)
+  fi
   if [[ "$CERT_MODE" == "certbot" && "$DEPLOY_MODE" == "domain" ]]; then
     required_pkgs+=(python3-certbot-nginx)
   fi
@@ -1233,6 +1425,9 @@ write_env_from_example() {
   local existing_remote_channel_api_hash
   local existing_remote_channel_session_string
   local existing_remote_channel_proxy_url
+  local existing_turn_urls
+  local existing_turn_username
+  local existing_turn_credential
   existing_public_key="$(get_existing_env_value "VAPID_PUBLIC_KEY" "")"
   existing_private_key="$(get_existing_env_value "VAPID_PRIVATE_KEY" "")"
   existing_subject="$(get_existing_env_value "VAPID_SUBJECT" "mailto:admin@example.com")"
@@ -1246,6 +1441,9 @@ write_env_from_example() {
   existing_remote_channel_api_hash="$(get_existing_env_value "REMOTE_CHANNEL_TELEGRAM_API_HASH" "")"
   existing_remote_channel_session_string="$(get_existing_env_value "REMOTE_CHANNEL_TELEGRAM_SESSION_STRING" "")"
   existing_remote_channel_proxy_url="$(get_existing_env_value "REMOTE_CHANNEL_PROXY_URL" "")"
+  existing_turn_urls="$(get_existing_env_value_with_fallback "APP_TURN_URLS" "CHAT_TURN_URLS" "")"
+  existing_turn_username="$(get_existing_env_value_with_fallback "APP_TURN_USERNAME" "CHAT_TURN_USERNAME" "")"
+  existing_turn_credential="$(get_existing_env_value_with_fallback "APP_TURN_CREDENTIAL" "CHAT_TURN_CREDENTIAL" "")"
 
   run_silent run_as_root cp "$example_file" "$env_file"
   replace_env_value "$env_file" "SERVER_PORT" "$existing_server_port"
@@ -1272,6 +1470,10 @@ write_env_from_example() {
   replace_env_value "$env_file" "STORAGE_ENCRYPTION_KEY" "$existing_storage_encryption_key"
   replace_env_value "$env_file" "VAPID_PUBLIC_KEY" "$existing_public_key"
   replace_env_value "$env_file" "VAPID_PRIVATE_KEY" "$existing_private_key"
+  replace_env_value "$env_file" "APP_TURN_URLS" "$existing_turn_urls"
+  replace_env_value "$env_file" "APP_TURN_USERNAME" "$existing_turn_username"
+  replace_env_value "$env_file" "APP_TURN_CREDENTIAL" "$existing_turn_credential"
+  apply_turn_env_settings "$env_file"
   if [[ -n "$CERTBOT_EMAIL" ]]; then
     replace_env_value "$env_file" "VAPID_SUBJECT" "mailto:${CERTBOT_EMAIL}"
   else
@@ -1292,6 +1494,9 @@ write_env_fallback() {
   local existing_remote_channel_api_hash
   local existing_remote_channel_session_string
   local existing_remote_channel_proxy_url
+  local existing_turn_urls
+  local existing_turn_username
+  local existing_turn_credential
   existing_storage_encryption_key="$(get_existing_env_value "STORAGE_ENCRYPTION_KEY" "")"
   existing_public_key="$(get_existing_env_value "VAPID_PUBLIC_KEY" "")"
   existing_private_key="$(get_existing_env_value "VAPID_PRIVATE_KEY" "")"
@@ -1301,6 +1506,9 @@ write_env_fallback() {
   existing_remote_channel_api_hash="$(get_existing_env_value "REMOTE_CHANNEL_TELEGRAM_API_HASH" "")"
   existing_remote_channel_session_string="$(get_existing_env_value "REMOTE_CHANNEL_TELEGRAM_SESSION_STRING" "")"
   existing_remote_channel_proxy_url="$(get_existing_env_value "REMOTE_CHANNEL_PROXY_URL" "")"
+  existing_turn_urls="$(get_existing_env_value_with_fallback "APP_TURN_URLS" "CHAT_TURN_URLS" "")"
+  existing_turn_username="$(get_existing_env_value_with_fallback "APP_TURN_USERNAME" "CHAT_TURN_USERNAME" "")"
+  existing_turn_credential="$(get_existing_env_value_with_fallback "APP_TURN_CREDENTIAL" "CHAT_TURN_CREDENTIAL" "")"
   run_silent run_as_root bash -lc "cat > '$env_file' <<'EOF'
 SERVER_PORT=${SERVER_PORT}
 CLIENT_PORT=${CLIENT_PORT}
@@ -1340,6 +1548,9 @@ CHAT_SSE_RECONNECT_DELAY=2000
 CHAT_SEARCH_MAX_RESULTS=5
 CHAT_VOICE_WAVEFORM_MAX_DECODE_BYTES=${DEFAULT_CHAT_VOICE_WAVEFORM_MAX_DECODE_BYTES}
 CHAT_VOICE_WAVEFORM_MAX_DECODE_SECONDS=${DEFAULT_CHAT_VOICE_WAVEFORM_MAX_DECODE_SECONDS}
+APP_TURN_URLS=${existing_turn_urls}
+APP_TURN_USERNAME=${existing_turn_username}
+APP_TURN_CREDENTIAL=${existing_turn_credential}
 NICKNAME_MAX=24
 USERNAME_MAX=16
 STORAGE_ENCRYPTION_KEY=${existing_storage_encryption_key}
@@ -1350,6 +1561,7 @@ EOF"
   if [[ -n "$CERTBOT_EMAIL" ]]; then
     replace_env_value "$env_file" "VAPID_SUBJECT" "mailto:${CERTBOT_EMAIL}"
   fi
+  apply_turn_env_settings "$env_file"
   log "Wrote fallback environment config to ${env_file}."
 }
 
@@ -1507,6 +1719,7 @@ collect_install_options() {
     RETENTION_DAYS="0"
   fi
   TEXT_RETENTION_DAYS="$(prompt_text_retention_days)"
+  prompt_turn_options
 
 }
 
@@ -2312,6 +2525,8 @@ install_birdx() {
     return 1
   fi
   RESTORE_BACKUP_QUIET="no"
+  apply_turn_env_settings "$INSTALL_DIR/.env"
+  configure_turn_server
   install_birdx_dependencies
   ensure_runtime_layout
   ensure_vapid_keys
@@ -2350,6 +2565,10 @@ install_birdx() {
     else
       log "Visit: https://${visit_ip}:${CLIENT_PORT}"
     fi
+  fi
+  if [[ "$TURN_ENABLED" == "true" ]]; then
+    log "TURN endpoint: ${TURN_HOST}:3478 (username: ${TURN_USERNAME})"
+    log_turn_firewall_hint
   fi
 
   press_enter_to_continue
