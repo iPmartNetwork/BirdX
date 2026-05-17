@@ -222,6 +222,21 @@ const USER_ROLE_SELECT_SQL = hasColumn("users", "role") ? "role" : "'user' AS ro
 const USER_ROLE_QUALIFIED_SELECT_SQL = hasColumn("users", "role")
   ? "users.role"
   : "'user' AS role";
+const USER_UPLOAD_DISABLED_SELECT_SQL = hasColumn("users", "file_upload_disabled")
+  ? "file_upload_disabled"
+  : "0 AS file_upload_disabled";
+const USER_UPLOAD_MAX_SIZE_SELECT_SQL = hasColumn("users", "file_upload_max_size_bytes")
+  ? "file_upload_max_size_bytes"
+  : "NULL AS file_upload_max_size_bytes";
+const USER_UPLOAD_DISABLED_QUALIFIED_SELECT_SQL = hasColumn("users", "file_upload_disabled")
+  ? "users.file_upload_disabled"
+  : "0 AS file_upload_disabled";
+const USER_UPLOAD_MAX_SIZE_QUALIFIED_SELECT_SQL = hasColumn(
+  "users",
+  "file_upload_max_size_bytes",
+)
+  ? "users.file_upload_max_size_bytes"
+  : "NULL AS file_upload_max_size_bytes";
 const SESSIONS_HAS_IP_ADDRESS = hasColumn("sessions", "ip_address");
 const SESSIONS_HAS_USER_AGENT = hasColumn("sessions", "user_agent");
 
@@ -239,14 +254,14 @@ export function getCurrentSchemaVersion() {
 
 export function findUserByUsername(username) {
   return getRow(
-    `SELECT id, username, nickname, avatar_url, color, status, password_hash, banned, ${USER_ROLE_SELECT_SQL} FROM users WHERE username = ?`,
+    `SELECT id, username, nickname, avatar_url, color, status, password_hash, banned, ${USER_ROLE_SELECT_SQL}, ${USER_UPLOAD_DISABLED_SELECT_SQL}, ${USER_UPLOAD_MAX_SIZE_SELECT_SQL} FROM users WHERE username = ?`,
     [username],
   );
 }
 
 export function findUserById(id) {
   return getRow(
-    `SELECT id, username, nickname, avatar_url, color, status, password_hash, banned, ${USER_ROLE_SELECT_SQL} FROM users WHERE id = ?`,
+    `SELECT id, username, nickname, avatar_url, color, status, password_hash, banned, ${USER_ROLE_SELECT_SQL}, ${USER_UPLOAD_DISABLED_SELECT_SQL}, ${USER_UPLOAD_MAX_SIZE_SELECT_SQL} FROM users WHERE id = ?`,
     [id],
   );
 }
@@ -254,13 +269,13 @@ export function findUserById(id) {
 export function listUsers(excludeUsername) {
   if (excludeUsername) {
     return getAll(
-      `SELECT id, username, nickname, avatar_url, color, status, banned, ${USER_ROLE_SELECT_SQL} FROM users WHERE username != ? ORDER BY username`,
+      `SELECT id, username, nickname, avatar_url, color, status, banned, ${USER_ROLE_SELECT_SQL}, ${USER_UPLOAD_DISABLED_SELECT_SQL}, ${USER_UPLOAD_MAX_SIZE_SELECT_SQL} FROM users WHERE username != ? ORDER BY username`,
       [excludeUsername],
     );
   }
 
   return getAll(
-    `SELECT id, username, nickname, avatar_url, color, status, banned, ${USER_ROLE_SELECT_SQL} FROM users ORDER BY username`,
+    `SELECT id, username, nickname, avatar_url, color, status, banned, ${USER_ROLE_SELECT_SQL}, ${USER_UPLOAD_DISABLED_SELECT_SQL}, ${USER_UPLOAD_MAX_SIZE_SELECT_SQL} FROM users ORDER BY username`,
   );
 }
 
@@ -269,13 +284,13 @@ export function searchUsers(query, excludeUsername) {
 
   if (excludeUsername) {
     return getAll(
-      `SELECT id, username, nickname, avatar_url, color, status, banned, ${USER_ROLE_SELECT_SQL} FROM users WHERE username != ? AND (username LIKE ? OR nickname LIKE ?) ORDER BY username`,
+      `SELECT id, username, nickname, avatar_url, color, status, banned, ${USER_ROLE_SELECT_SQL}, ${USER_UPLOAD_DISABLED_SELECT_SQL}, ${USER_UPLOAD_MAX_SIZE_SELECT_SQL} FROM users WHERE username != ? AND (username LIKE ? OR nickname LIKE ?) ORDER BY username`,
       [excludeUsername, like, like],
     );
   }
 
   return getAll(
-    `SELECT id, username, nickname, avatar_url, color, status, banned, ${USER_ROLE_SELECT_SQL} FROM users WHERE username LIKE ? OR nickname LIKE ? ORDER BY username`,
+    `SELECT id, username, nickname, avatar_url, color, status, banned, ${USER_ROLE_SELECT_SQL}, ${USER_UPLOAD_DISABLED_SELECT_SQL}, ${USER_UPLOAD_MAX_SIZE_SELECT_SQL} FROM users WHERE username LIKE ? OR nickname LIKE ? ORDER BY username`,
     [like, like],
   );
 }
@@ -1565,11 +1580,13 @@ export function listChatsForUser(userId) {
         c.group_avatar_url,
         c.created_by_user_id,
         c.created_at,
-        COALESCE(mu.muted, 0) AS muted
+        COALESCE(mu.muted, 0) AS muted,
+        COALESCE(rc.enabled, 0) AS required_channel
       FROM chats c
       JOIN chat_members m ON m.chat_id = c.id
       LEFT JOIN chat_mutes mu ON mu.chat_id = c.id AND mu.user_id = m.user_id
       LEFT JOIN hidden_chats h ON h.chat_id = c.id AND h.user_id = m.user_id
+      LEFT JOIN required_channels rc ON rc.chat_id = c.id AND rc.enabled = 1
       WHERE m.user_id = ?
         AND h.chat_id IS NULL
     ),
@@ -1624,6 +1641,7 @@ export function listChatsForUser(userId) {
       mc.group_avatar_url,
       mc.created_by_user_id,
       mc.muted,
+      mc.required_channel,
       lvm.last_message_id,
       last_vm.body AS last_message,
       last_vm.created_at AS last_time,
@@ -1648,7 +1666,7 @@ export function listChatsForUser(userId) {
     LEFT JOIN last_outgoing_message_ids lom ON lom.chat_id = mc.id
     LEFT JOIN visible_messages outgoing_vm ON outgoing_vm.id = lom.last_outgoing_message_id
     LEFT JOIN unread_counts uc ON uc.chat_id = mc.id
-    ORDER BY lvm.last_message_id DESC, mc.created_at DESC
+    ORDER BY mc.required_channel DESC, lvm.last_message_id DESC, mc.created_at DESC
   `,
     [
       Number(userId),
@@ -2362,7 +2380,8 @@ export function getSession(token) {
   return getRow(
     `
     SELECT sessions.id AS session_id, sessions.token, users.id, users.username, users.nickname,
-           users.avatar_url, users.color, users.status, users.banned, ${USER_ROLE_QUALIFIED_SELECT_SQL}
+           users.avatar_url, users.color, users.status, users.banned, ${USER_ROLE_QUALIFIED_SELECT_SQL},
+           ${USER_UPLOAD_DISABLED_QUALIFIED_SELECT_SQL}, ${USER_UPLOAD_MAX_SIZE_QUALIFIED_SELECT_SQL}
     FROM sessions
     JOIN users ON users.id = sessions.user_id
     WHERE sessions.token = ?
