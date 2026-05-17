@@ -191,6 +191,12 @@ export default function App() {
       status: data.status || 'online',
       role: data.role || 'user',
       isAdmin: Boolean(data.isAdmin),
+      fileUploadDisabled: Boolean(data.fileUploadDisabled),
+      fileUploadMaxSizeBytes:
+        Number.isFinite(Number(data.fileUploadMaxSizeBytes)) &&
+        Number(data.fileUploadMaxSizeBytes) > 0
+          ? Number(data.fileUploadMaxSizeBytes)
+          : null,
     }
   }
 
@@ -782,6 +788,12 @@ export default function App() {
         status: data.status || 'online',
         role: data.role || 'user',
         isAdmin: Boolean(data.isAdmin),
+        fileUploadDisabled: Boolean(data.fileUploadDisabled),
+        fileUploadMaxSizeBytes:
+          Number.isFinite(Number(data.fileUploadMaxSizeBytes)) &&
+          Number(data.fileUploadMaxSizeBytes) > 0
+            ? Number(data.fileUploadMaxSizeBytes)
+            : null,
       }
       const nextUser = await resolveSessionUserWithRetry(fallbackUser)
       setUser(nextUser)
