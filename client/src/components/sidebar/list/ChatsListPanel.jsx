@@ -11,6 +11,7 @@ import {
   Minus,
   Bookmark,
   Megaphone,
+  Pin,
   Users,
   VolumeX,
   Video,
@@ -465,6 +466,7 @@ export default function ChatsListPanel({
               : null;
           const isDeletedDm = conv.type === "dm" && !other;
           const isChannel = conv.type === "channel";
+          const isPinned = Boolean(Number(conv.required_channel || conv.requiredChannel || 0));
           const isGroup = conv.type === "group";
           const isSaved = conv.type === "saved";
           const isChannelOwner =
@@ -564,6 +566,13 @@ export default function ChatsListPanel({
                         size={15}
                         className="-translate-y-px shrink-0 text-slate-400 dark:text-slate-500"
                         aria-label="Muted chat"
+                      />
+                    ) : null}
+                    {isPinned ? (
+                      <Pin
+                        size={13}
+                        className="-translate-y-px shrink-0 text-emerald-500"
+                        aria-label="Pinned channel"
                       />
                     ) : null}
                   </p>
