@@ -544,7 +544,7 @@ configure_turn_server() {
   fi
 
   local external_ip_line=""
-  if [[ -z "$TURN_PUBLIC_IP" && ! is_ipv4_address "$TURN_HOST" ]]; then
+  if [[ -z "$TURN_PUBLIC_IP" ]] && ! is_ipv4_address "$TURN_HOST"; then
     TURN_PUBLIC_IP="$(detect_public_ip || true)"
   fi
   if [[ -n "$TURN_PUBLIC_IP" ]]; then
@@ -1420,6 +1420,7 @@ write_env_from_example() {
   local existing_voice_waveform_max_decode_bytes
   local existing_voice_waveform_max_decode_seconds
   local existing_storage_encryption_key
+  local existing_file_upload_hard_max_size
   local existing_remote_channel
   local existing_remote_channel_api_id
   local existing_remote_channel_api_hash
@@ -1436,6 +1437,7 @@ write_env_from_example() {
   existing_voice_waveform_max_decode_bytes="$(get_existing_env_value "CHAT_VOICE_WAVEFORM_MAX_DECODE_BYTES" "$DEFAULT_CHAT_VOICE_WAVEFORM_MAX_DECODE_BYTES")"
   existing_voice_waveform_max_decode_seconds="$(get_existing_env_value "CHAT_VOICE_WAVEFORM_MAX_DECODE_SECONDS" "$DEFAULT_CHAT_VOICE_WAVEFORM_MAX_DECODE_SECONDS")"
   existing_storage_encryption_key="$(get_existing_env_value "STORAGE_ENCRYPTION_KEY" "")"
+  existing_file_upload_hard_max_size="$(get_existing_env_value "FILE_UPLOAD_HARD_MAX_SIZE" "1073741824")"
   existing_remote_channel="$(get_existing_env_value "REMOTE_CHANNEL" "false")"
   existing_remote_channel_api_id="$(get_existing_env_value "REMOTE_CHANNEL_TELEGRAM_API_ID" "0")"
   existing_remote_channel_api_hash="$(get_existing_env_value "REMOTE_CHANNEL_TELEGRAM_API_HASH" "")"
@@ -1452,6 +1454,7 @@ write_env_from_example() {
   replace_env_value "$env_file" "CLIENT_PORT" "$CLIENT_PORT"
   replace_env_value "$env_file" "ACCOUNT_CREATION" "$ACCOUNT_CREATION"
   replace_env_value "$env_file" "FILE_UPLOAD" "$FILE_UPLOAD"
+  replace_env_value "$env_file" "FILE_UPLOAD_HARD_MAX_SIZE" "$existing_file_upload_hard_max_size"
   replace_env_value "$env_file" "FILE_UPLOAD_MAX_TOTAL_SIZE" "$MAX_UPLOAD"
   replace_env_value "$env_file" "MESSAGE_FILE_RETENTION" "$RETENTION_DAYS"
   replace_env_value "$env_file" "MESSAGE_TEXT_RETENTION" "$TEXT_RETENTION_DAYS"
@@ -1489,6 +1492,7 @@ write_env_fallback() {
   local existing_public_key
   local existing_private_key
   local existing_subject
+  local existing_file_upload_hard_max_size
   local existing_remote_channel
   local existing_remote_channel_api_id
   local existing_remote_channel_api_hash
@@ -1501,6 +1505,7 @@ write_env_fallback() {
   existing_public_key="$(get_existing_env_value "VAPID_PUBLIC_KEY" "")"
   existing_private_key="$(get_existing_env_value "VAPID_PRIVATE_KEY" "")"
   existing_subject="$(get_existing_env_value "VAPID_SUBJECT" "mailto:admin@example.com")"
+  existing_file_upload_hard_max_size="$(get_existing_env_value "FILE_UPLOAD_HARD_MAX_SIZE" "1073741824")"
   existing_remote_channel="$(get_existing_env_value "REMOTE_CHANNEL" "false")"
   existing_remote_channel_api_id="$(get_existing_env_value "REMOTE_CHANNEL_TELEGRAM_API_ID" "0")"
   existing_remote_channel_api_hash="$(get_existing_env_value "REMOTE_CHANNEL_TELEGRAM_API_HASH" "")"
@@ -1517,6 +1522,7 @@ APP_DEBUG=false
 ACCOUNT_CREATION=${ACCOUNT_CREATION}
 FILE_UPLOAD=${FILE_UPLOAD}
 FILE_UPLOAD_MAX_SIZE=26214400
+FILE_UPLOAD_HARD_MAX_SIZE=${existing_file_upload_hard_max_size}
 FILE_UPLOAD_MAX_TOTAL_SIZE=${MAX_UPLOAD}
 FILE_UPLOAD_MAX_FILES=10
 FILE_UPLOAD_TRANSCODE_VIDEOS=true
