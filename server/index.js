@@ -123,7 +123,7 @@ import {
   toggleMessageReaction,
 } from "./db.js";
 
-process.title = "songbird-server";
+process.title = "birdx.service";
 
 const app = express();
 const serverDir = path.dirname(fileURLToPath(import.meta.url));
