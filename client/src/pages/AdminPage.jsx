@@ -44,6 +44,7 @@ import {
   ShieldCheck,
   Sun,
   Trash,
+  Upload,
   User,
   UserPlus,
   Users,
@@ -137,6 +138,20 @@ function formatDuration(seconds = 0) {
   if (days) return `${days}d ${hours}h`;
   if (hours) return `${hours}h ${minutes}m`;
   return `${minutes}m`;
+}
+
+function formatBytesLabel(bytes = 0) {
+  const value = Math.max(0, Number(bytes || 0));
+  if (value >= 1024 * 1024 * 1024) return `${(value / (1024 * 1024 * 1024)).toFixed(2)} GB`;
+  if (value >= 1024 * 1024) return `${(value / (1024 * 1024)).toFixed(2)} MB`;
+  if (value >= 1024) return `${(value / 1024).toFixed(1)} KB`;
+  return `${value} B`;
+}
+
+function bytesToMbInput(bytes) {
+  const value = Number(bytes || 0);
+  if (!Number.isFinite(value) || value <= 0) return "";
+  return String(Math.round(value / (1024 * 1024)));
 }
 
 function EmptyState({ text }) {
@@ -244,8 +259,28 @@ function ActionModal({ action, onClose, onConfirm, busy }) {
   );
 }
 
-function UserDetailDrawer({ detail, onClose, onRevokeSession, onRevokeAllSessions }) {
+function UserDetailDrawer({
+  detail,
+  onClose,
+  onRevokeSession,
+  onRevokeAllSessions,
+  onSaveUploadPolicy,
+}) {
+  const user = detail?.user || {};
+  const [uploadDisabled, setUploadDisabled] = useState(() =>
+    Boolean(user.file_upload_disabled),
+  );
+  const [uploadMaxMb, setUploadMaxMb] = useState(() =>
+    bytesToMbInput(user.file_upload_max_size_bytes),
+  );
+
   if (!detail) return null;
+  const uploadOverrideLabel = user.file_upload_max_size_bytes
+    ? formatBytesLabel(user.file_upload_max_size_bytes)
+    : "Server default";
+  const uploadEffectiveLabel =
+    user.file_upload_effective_max_size_label ||
+    formatBytesLabel(user.file_upload_effective_max_size_bytes || 0);
   return (
     <div className="fixed inset-0 z-[420] bg-slate-950/40 backdrop-blur-sm">
       <aside className="ml-auto flex h-full w-full max-w-xl flex-col overflow-hidden border-l border-slate-200 bg-white shadow-2xl dark:border-white/10 dark:bg-slate-950">
@@ -274,6 +309,61 @@ function UserDetailDrawer({ detail, onClose, onRevokeSession, onRevokeAllSession
             <StatCard label="Files" value={detail.stats.files} detail={detail.stats.storageLabel} icon={File} />
             <StatCard label="Sessions" value={detail.stats.sessions} icon={Lock} />
           </div>
+
+          <section className="rounded-lg border border-slate-200 bg-white p-4 dark:border-white/10 dark:bg-slate-900">
+            <div className="flex flex-wrap items-start justify-between gap-3">
+              <div>
+                <h3 className="text-sm font-bold">File sending</h3>
+                <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">
+                  Effective limit: {uploadDisabled ? "disabled" : uploadEffectiveLabel}
+                </p>
+              </div>
+              <span className={`rounded-full px-2 py-1 text-xs font-bold ${uploadDisabled ? "bg-rose-100 text-rose-700 dark:bg-rose-500/10 dark:text-rose-200" : "bg-emerald-100 text-emerald-700 dark:bg-emerald-500/10 dark:text-emerald-200"}`}>
+                {uploadDisabled ? "disabled" : "enabled"}
+              </span>
+            </div>
+            <div className="mt-4 grid gap-3 sm:grid-cols-[1fr_180px_auto]">
+              <label className="flex items-center gap-2 rounded-lg border border-slate-200 px-3 py-2 text-sm font-semibold dark:border-white/10">
+                <input
+                  type="checkbox"
+                  checked={uploadDisabled}
+                  onChange={(event) => setUploadDisabled(event.target.checked)}
+                />
+                Block file sending
+              </label>
+              <label>
+                <span className="text-xs font-bold uppercase tracking-wide text-slate-500">Max file MB</span>
+                <input
+                  type="number"
+                  min="1"
+                  step="1"
+                  value={uploadMaxMb}
+                  onChange={(event) => setUploadMaxMb(event.target.value)}
+                  placeholder="Default"
+                  className="mt-2 h-10 w-full rounded-lg border border-slate-200 bg-white px-3 text-sm dark:border-white/10 dark:bg-slate-950"
+                />
+              </label>
+              <button
+                type="button"
+                onClick={() => {
+                  const mb = Number(uploadMaxMb || 0);
+                  onSaveUploadPolicy?.(detail.user, {
+                    fileUploadDisabled: uploadDisabled,
+                    fileUploadMaxSizeBytes:
+                      Number.isFinite(mb) && mb > 0
+                        ? Math.trunc(mb * 1024 * 1024)
+                        : null,
+                  });
+                }}
+                className="inline-flex h-10 items-center justify-center gap-2 self-end rounded-lg bg-emerald-500 px-4 text-sm font-semibold text-white"
+              >
+                <Upload size={15} />Save
+              </button>
+            </div>
+            <p className="mt-2 text-xs text-slate-500 dark:text-slate-400">
+              Current override: {uploadOverrideLabel}
+            </p>
+          </section>
 
           <section className="rounded-lg border border-slate-200 bg-white p-4 dark:border-white/10 dark:bg-slate-900">
             <div className="flex items-center justify-between gap-3">
@@ -638,6 +728,32 @@ export default function AdminPage({ user, isDark, onToggleTheme, onNavigate }) {
     }
   };
 
+  const handleSaveUserUploadPolicy = (targetUser, policy) => {
+    if (!targetUser?.id) return;
+    const limitLabel = policy.fileUploadMaxSizeBytes
+      ? formatBytesLabel(policy.fileUploadMaxSizeBytes)
+      : "server default";
+    confirmAction({
+      title: "Update file sending",
+      body: `Update file sending for @${targetUser.username}? Limit: ${
+        policy.fileUploadDisabled ? "disabled" : limitLabel
+      }.`,
+      confirmLabel: "Save",
+      requiresPassword: true,
+      run: async ({ adminPassword }) =>
+        readJsonResponse(
+          await updateAdminUser(targetUser.id, {
+            ...policy,
+            adminPassword,
+          }),
+        ),
+      refresh: async () => {
+        await loadUsers();
+        await openUserDetail(targetUser);
+      },
+    });
+  };
+
   const loadChatDetail = useCallback(async (chatId) => {
     const data = await readJsonResponse(await fetchAdminChatDetail(chatId));
     setChatDetail(data);
@@ -950,6 +1066,7 @@ export default function AdminPage({ user, isDark, onToggleTheme, onNavigate }) {
                         <th className="px-4 py-3">User</th>
                         <th className="px-4 py-3">Role</th>
                         <th className="px-4 py-3">Status</th>
+                        <th className="px-4 py-3">Upload</th>
                         <th className="px-4 py-3">Activity</th>
                         <th className="px-4 py-3 text-right">Actions</th>
                       </tr>
@@ -995,6 +1112,9 @@ export default function AdminPage({ user, isDark, onToggleTheme, onNavigate }) {
                             <span className={`rounded-full px-2 py-1 text-xs font-bold ${item.banned ? "bg-rose-100 text-rose-700 dark:bg-rose-500/10 dark:text-rose-200" : "bg-emerald-100 text-emerald-700 dark:bg-emerald-500/10 dark:text-emerald-200"}`}>
                               {item.banned ? "banned" : "active"}
                             </span>
+                          </td>
+                          <td className="px-4 py-3 text-xs font-semibold text-slate-500 dark:text-slate-400">
+                            {item.file_upload_disabled ? "Disabled" : item.file_upload_effective_max_size_label || "Default"}
                           </td>
                           <td className="px-4 py-3 text-xs text-slate-500 dark:text-slate-400">{item.chat_count} chats / {item.message_count} messages</td>
                           <td className="px-4 py-3">
@@ -1108,6 +1228,7 @@ export default function AdminPage({ user, isDark, onToggleTheme, onNavigate }) {
               <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
                 <StatCard label="Account Creation" value={settings?.accountCreation ? "Enabled" : "Disabled"} detail="Controlled by .env" icon={Settings} />
                 <StatCard label="Message Limit" value={settings?.messageMaxChars || 0} detail="Maximum characters per message" icon={Database} />
+                <StatCard label="Default Upload" value={settings?.defaultUploadMaxSizeLabel || "0 B"} detail={settings?.fileUpload ? "File sending enabled" : "File sending disabled"} icon={Upload} />
                 <StatCard label="Storage Encryption" value={settings?.storageEncryption ? "Enabled" : "Disabled"} detail="Server-side storage encryption" icon={Lock} />
                 <StatCard label="Required Channels" value={requiredChannels.length} detail="Auto-joined announcement channels" icon={Chat} />
               </div>
@@ -1115,7 +1236,7 @@ export default function AdminPage({ user, isDark, onToggleTheme, onNavigate }) {
                 <div className="flex flex-wrap items-center justify-between gap-3">
                   <div>
                     <h2 className="text-sm font-bold">Required channels</h2>
-                    <p className="text-xs text-slate-500 dark:text-slate-400">New accounts are added automatically and members cannot leave these channels.</p>
+                    <p className="text-xs text-slate-500 dark:text-slate-400">New accounts are added automatically, members cannot leave, and selected channels stay pinned at the top of chat lists.</p>
                   </div>
                   <div className="flex flex-wrap gap-2">
                     <button
@@ -1228,6 +1349,11 @@ export default function AdminPage({ user, isDark, onToggleTheme, onNavigate }) {
         }}
       />
       <UserDetailDrawer
+        key={
+          userDetail?.user
+            ? `${userDetail.user.id}-${Number(userDetail.user.file_upload_disabled || 0)}-${Number(userDetail.user.file_upload_max_size_bytes || 0)}`
+            : "user-detail"
+        }
         detail={userDetail}
         onClose={() => setUserDetail(null)}
         onRevokeSession={(detailUser, session) =>
@@ -1258,6 +1384,7 @@ export default function AdminPage({ user, isDark, onToggleTheme, onNavigate }) {
             refresh: loadUsers,
           })
         }
+        onSaveUploadPolicy={handleSaveUserUploadPolicy}
       />
       <ChatDetailDrawer
         key={
