@@ -41,6 +41,15 @@ function registerAuthRoutes(app, deps) {
     userAgent: String(req.headers?.["user-agent"] || "").slice(0, 500),
   });
 
+  const userUploadPolicyPayload = (user = {}) => ({
+    fileUploadDisabled: Boolean(Number(user.file_upload_disabled || 0)),
+    fileUploadMaxSizeBytes:
+      Number.isFinite(Number(user.file_upload_max_size_bytes)) &&
+      Number(user.file_upload_max_size_bytes) > 0
+        ? Number(user.file_upload_max_size_bytes)
+        : null,
+  });
+
   const recordSecurityEvent = (req, type, details = {}) => {
     try {
       adminRun?.(
@@ -138,6 +147,7 @@ function registerAuthRoutes(app, deps) {
       status: "online",
       role: "user",
       isAdmin: ADMIN_USERNAMES.includes(trimmed),
+      ...userUploadPolicyPayload({}),
       requiredChannelMemberships,
     });
   });
@@ -191,6 +201,7 @@ function registerAuthRoutes(app, deps) {
           String(user.role || "").toLowerCase(),
         ) ||
         ADMIN_USERNAMES.includes(String(user.username || "").toLowerCase()),
+      ...userUploadPolicyPayload(user),
     });
   });
 
@@ -213,6 +224,7 @@ function registerAuthRoutes(app, deps) {
           String(session.role || "").toLowerCase(),
         ) ||
         ADMIN_USERNAMES.includes(String(session.username || "").toLowerCase()),
+      ...userUploadPolicyPayload(session),
     });
   });
 
