@@ -249,6 +249,12 @@ const FILE_UPLOAD_MAX_SIZE = readEnvInt(
   { min: 1024 },
 );
 
+const FILE_UPLOAD_HARD_MAX_SIZE = readEnvInt(
+  "FILE_UPLOAD_HARD_MAX_SIZE",
+  Math.max(FILE_UPLOAD_MAX_SIZE, 1024 * 1024 * 1024),
+  { min: FILE_UPLOAD_MAX_SIZE },
+);
+
 const FILE_UPLOAD_MAX_FILES = readEnvInt("FILE_UPLOAD_MAX_FILES", 10, {
   min: 1,
 });
@@ -333,6 +339,7 @@ const uploadTools = createUploadTools({
   uploadRootDir,
   avatarUploadRootDir,
   fileUploadMaxSize: FILE_UPLOAD_MAX_SIZE,
+  fileUploadHardMaxSize: FILE_UPLOAD_HARD_MAX_SIZE,
   fileUploadMaxFiles: FILE_UPLOAD_MAX_FILES,
   fileUploadMaxTotalSize: FILE_UPLOAD_MAX_TOTAL_SIZE,
   storageEncryption,
@@ -531,6 +538,7 @@ const apiDeps = {
   APP_DEBUG,
   AVATAR_FILE_LIMITS,
   FILE_UPLOAD,
+  FILE_UPLOAD_HARD_MAX_SIZE,
   MESSAGE_FILE_LIMITS,
   MESSAGE_FILE_RETENTION_DAYS,
   MESSAGE_TEXT_RETENTION_DAYS,
@@ -761,7 +769,7 @@ app.use((err, req, res, next) => {
       }
 
       return res.status(400).json({
-        error: `Each file must be smaller than ${Math.round(MESSAGE_FILE_LIMITS.maxFileSizeBytes / (1024 * 1024))} MB.`,
+        error: `Each file must be smaller than ${Math.round(MESSAGE_FILE_LIMITS.maxHardFileSizeBytes / (1024 * 1024))} MB.`,
       });
     }
 
