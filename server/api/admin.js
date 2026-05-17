@@ -24,6 +24,9 @@ function registerAdminRoutes(app, deps) {
     MESSAGE_MAX_CHARS,
     ACCOUNT_CREATION,
     APP_ENV,
+    FILE_UPLOAD,
+    FILE_UPLOAD_HARD_MAX_SIZE,
+    MESSAGE_FILE_LIMITS,
     VAPID_PUBLIC_KEY,
     USERNAME_REGEX,
     isLoopbackRequest,
@@ -70,6 +73,12 @@ function registerAdminRoutes(app, deps) {
     try {
       if (!adminHasColumn("users", "role")) {
         adminRun("ALTER TABLE users ADD COLUMN role TEXT NOT NULL DEFAULT 'user'");
+      }
+      if (!adminHasColumn("users", "file_upload_disabled")) {
+        adminRun("ALTER TABLE users ADD COLUMN file_upload_disabled INTEGER NOT NULL DEFAULT 0");
+      }
+      if (!adminHasColumn("users", "file_upload_max_size_bytes")) {
+        adminRun("ALTER TABLE users ADD COLUMN file_upload_max_size_bytes INTEGER");
       }
 
       if (!adminHasColumn("sessions", "ip_address")) {
@@ -262,6 +271,45 @@ function registerAdminRoutes(app, deps) {
     if (value >= 1024 * 1024) return `${(value / (1024 * 1024)).toFixed(2)} MB`;
     if (value >= 1024) return `${(value / 1024).toFixed(1)} KB`;
     return `${value} B`;
+  };
+  const defaultUploadMaxBytes = Math.max(
+    1024,
+    Number(MESSAGE_FILE_LIMITS?.maxFileSizeBytes || 0),
+  );
+  const hardUploadMaxBytes = Math.max(
+    defaultUploadMaxBytes,
+    Number(
+      FILE_UPLOAD_HARD_MAX_SIZE ||
+        MESSAGE_FILE_LIMITS?.maxHardFileSizeBytes ||
+        defaultUploadMaxBytes,
+    ),
+  );
+  const normalizeUploadMaxSizeBytes = (value) => {
+    if (value === undefined) return undefined;
+    if (value === null || value === "" || value === false) return null;
+    const parsed = Number(value);
+    if (!Number.isFinite(parsed) || parsed <= 0) return null;
+    const bytes = Math.trunc(parsed);
+    const minBytes = 1024 * 1024;
+    if (bytes < minBytes) {
+      throw new Error("Upload limit must be at least 1 MB, or blank for the server default.");
+    }
+    if (bytes > hardUploadMaxBytes) {
+      throw new Error(`Upload limit cannot exceed ${toBytesLabel(hardUploadMaxBytes)}.`);
+    }
+    return bytes;
+  };
+  const uploadPolicyPayload = (user = {}) => {
+    const overrideBytes = Number(user.file_upload_max_size_bytes || 0);
+    const hasOverride = Number.isFinite(overrideBytes) && overrideBytes > 0;
+    const effectiveMaxBytes = hasOverride ? overrideBytes : defaultUploadMaxBytes;
+    return {
+      file_upload_disabled: Boolean(Number(user.file_upload_disabled || 0)),
+      file_upload_max_size_bytes: hasOverride ? overrideBytes : null,
+      file_upload_max_size_label: hasOverride ? toBytesLabel(overrideBytes) : "Server default",
+      file_upload_effective_max_size_bytes: effectiveMaxBytes,
+      file_upload_effective_max_size_label: toBytesLabel(effectiveMaxBytes),
+    };
   };
 
   const countRoleAdmins = () =>
@@ -714,6 +762,7 @@ function registerAdminRoutes(app, deps) {
         SELECT
           users.id, users.username, users.nickname, users.avatar_url, users.color,
           users.status, users.banned, users.role, users.created_at, users.last_seen,
+          users.file_upload_disabled, users.file_upload_max_size_bytes,
           COUNT(DISTINCT chat_members.chat_id) AS chat_count,
           COUNT(DISTINCT chat_messages.id) AS message_count
         FROM users
@@ -733,6 +782,7 @@ function registerAdminRoutes(app, deps) {
       envAdmin: adminUsernameSet.has(String(user.username || "").toLowerCase()),
       chat_count: Number(user.chat_count || 0),
       message_count: Number(user.message_count || 0),
+      ...uploadPolicyPayload(user),
     }));
 
     res.json({
@@ -749,7 +799,7 @@ function registerAdminRoutes(app, deps) {
     const userId = toInt(req.params.id);
     const user = userId
       ? adminGetRow(
-          `SELECT id, username, nickname, avatar_url, color, status, banned, role, created_at, last_seen
+          `SELECT id, username, nickname, avatar_url, color, status, banned, role, file_upload_disabled, file_upload_max_size_bytes, created_at, last_seen
            FROM users
            WHERE id = ?`,
           [userId],
@@ -817,6 +867,7 @@ function registerAdminRoutes(app, deps) {
         banned: Boolean(Number(user.banned || 0)),
         role: normalizeAdminRole(user.role),
         envAdmin: adminUsernameSet.has(String(user.username || "").toLowerCase()),
+        ...uploadPolicyPayload(user),
       },
       stats: {
         messages: Number(stats?.messages || 0),
@@ -837,7 +888,12 @@ function registerAdminRoutes(app, deps) {
     if (!session) return;
 
     const userId = toInt(req.params.id);
-    const target = userId ? adminGetRow("SELECT id, username, role, banned FROM users WHERE id = ?", [userId]) : null;
+    const target = userId
+      ? adminGetRow(
+          "SELECT id, username, role, banned, file_upload_disabled, file_upload_max_size_bytes FROM users WHERE id = ?",
+          [userId],
+        )
+      : null;
     if (!target?.id) return res.status(404).json({ error: "User not found." });
     if (Number(target.id) === Number(session.id) && req.body?.banned !== undefined) {
       return res.status(400).json({ error: "You cannot ban your own admin account." });
@@ -873,6 +929,20 @@ function registerAdminRoutes(app, deps) {
       updates.push("banned = ?");
       params.push(req.body.banned ? 1 : 0);
     }
+    if (req.body?.fileUploadDisabled !== undefined) {
+      updates.push("file_upload_disabled = ?");
+      params.push(req.body.fileUploadDisabled ? 1 : 0);
+    }
+    if (req.body?.fileUploadMaxSizeBytes !== undefined) {
+      let nextUploadMaxBytes;
+      try {
+        nextUploadMaxBytes = normalizeUploadMaxSizeBytes(req.body.fileUploadMaxSizeBytes);
+      } catch (error) {
+        return res.status(400).json({ error: error?.message || "Invalid upload limit." });
+      }
+      updates.push("file_upload_max_size_bytes = ?");
+      params.push(nextUploadMaxBytes);
+    }
     if (!updates.length) return res.status(400).json({ error: "No changes provided." });
     if (!requireAdminPassword(req, res, session)) return;
     params.push(userId);
@@ -884,6 +954,8 @@ function registerAdminRoutes(app, deps) {
     writeAuditLog(req, session, "user.update", "user", userId, {
       role: req.body?.role,
       banned: req.body?.banned,
+      fileUploadDisabled: req.body?.fileUploadDisabled,
+      fileUploadMaxSizeBytes: req.body?.fileUploadMaxSizeBytes,
     });
     res.json({ ok: true });
   });
@@ -1563,6 +1635,12 @@ function registerAdminRoutes(app, deps) {
       settings: {
         accountCreation: Boolean(ACCOUNT_CREATION),
         messageMaxChars: Number(MESSAGE_MAX_CHARS || 0),
+        fileUpload: Boolean(FILE_UPLOAD),
+        defaultUploadMaxSizeBytes: defaultUploadMaxBytes,
+        defaultUploadMaxSizeLabel: toBytesLabel(defaultUploadMaxBytes),
+        hardUploadMaxSizeBytes: hardUploadMaxBytes,
+        hardUploadMaxSizeLabel: toBytesLabel(hardUploadMaxBytes),
+        maxFilesPerMessage: Number(MESSAGE_FILE_LIMITS?.maxFiles || 0),
         adminUsernames: Array.from(adminUsernameSet),
         storageEncryption: Boolean(storageEncryption?.isEnabled?.()),
         database: dbInfo?.database || null,
