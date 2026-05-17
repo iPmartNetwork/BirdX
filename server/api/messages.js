@@ -75,6 +75,30 @@ function registerMessageRoutes(app, deps) {
     ).toISOString();
   };
 
+  const resolveUserUploadLimits = (user = {}) => {
+    const defaultMaxFileSize = Math.max(
+      1024,
+      Number(MESSAGE_FILE_LIMITS.maxFileSizeBytes || 0),
+    );
+    const overrideMaxFileSize = Math.trunc(
+      Number(user.file_upload_max_size_bytes || 0),
+    );
+    const maxFileSizeBytes =
+      Number.isFinite(overrideMaxFileSize) && overrideMaxFileSize > 0
+        ? overrideMaxFileSize
+        : defaultMaxFileSize;
+    return {
+      disabled: Boolean(Number(user.file_upload_disabled || 0)),
+      maxFileSizeBytes,
+      maxTotalBytes: Math.max(
+        Number(MESSAGE_FILE_LIMITS.maxTotalBytes || 0),
+        maxFileSizeBytes,
+      ),
+    };
+  };
+
+  const formatMb = (bytes) => Math.round(Number(bytes || 0) / (1024 * 1024));
+
   const normalizeForwardOriginAvatarUrl = (userId, avatarUrl) => {
     const normalized = ensureAvatarExists(userId, avatarUrl);
     return String(normalized || "").trim() || null;
@@ -559,6 +583,24 @@ function registerMessageRoutes(app, deps) {
           return res.status(404).json({ error: "User not found." });
         }
 
+        const uploadLimits = resolveUserUploadLimits(user);
+        if (uploadLimits.disabled) {
+          removeUploadedFiles(uploadedFiles);
+          return res
+            .status(403)
+            .json({ error: "File uploads are disabled for this account." });
+        }
+
+        const oversizeFile = uploadedFiles.find(
+          (file) => Number(file?.size || 0) > uploadLimits.maxFileSizeBytes,
+        );
+        if (oversizeFile) {
+          removeUploadedFiles(uploadedFiles);
+          return res.status(400).json({
+            error: `Each file must be smaller than ${formatMb(uploadLimits.maxFileSizeBytes)} MB.`,
+          });
+        }
+
         if (!isMember(chatId, user.id)) {
           removeUploadedFiles(uploadedFiles);
 
@@ -615,11 +657,11 @@ function registerMessageRoutes(app, deps) {
           0,
         );
 
-        if (totalBytes > MESSAGE_FILE_LIMITS.maxTotalBytes) {
+        if (totalBytes > uploadLimits.maxTotalBytes) {
           removeUploadedFiles(uploadedFiles);
 
           return res.status(400).json({
-            error: `Total upload size cannot exceed ${Math.round(MESSAGE_FILE_LIMITS.maxTotalBytes / (1024 * 1024))} MB.`,
+            error: `Total upload size cannot exceed ${formatMb(uploadLimits.maxTotalBytes)} MB.`,
           });
         }
 
