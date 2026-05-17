@@ -264,6 +264,39 @@ const normalizeChatSummary = (chat) => {
   };
 };
 
+const resolveUploadConfig = (user) => {
+  const userMaxFileSize = Math.trunc(Number(user?.fileUploadMaxSizeBytes || 0));
+  const maxFileSizeBytes =
+    Number.isFinite(userMaxFileSize) && userMaxFileSize > 0
+      ? userMaxFileSize
+      : CHAT_PAGE_CONFIG.maxFileSizeBytes;
+  return {
+    fileUploadEnabled:
+      CHAT_PAGE_CONFIG.fileUploadEnabled && !user?.fileUploadDisabled,
+    maxFilesPerMessage: CHAT_PAGE_CONFIG.maxFilesPerMessage,
+    maxFileSizeBytes,
+    maxTotalUploadBytes: Math.max(
+      Number(CHAT_PAGE_CONFIG.maxTotalUploadBytes || 0),
+      maxFileSizeBytes,
+    ),
+  };
+};
+
+const isPinnedChat = (chat) =>
+  Boolean(Number(chat?.required_channel || chat?.requiredChannel || 0));
+
+const comparePinnedChats = (a, b) => {
+  const pinDiff = Number(isPinnedChat(b)) - Number(isPinnedChat(a));
+  if (pinDiff) return pinDiff;
+  const aTime = a?.last_time ? parseServerDate(a.last_time).getTime() : 0;
+  const bTime = b?.last_time ? parseServerDate(b.last_time).getTime() : 0;
+  if (bTime !== aTime) return bTime - aTime;
+  return Number(b?.id || 0) - Number(a?.id || 0);
+};
+
+const sortPinnedChatsFirst = (items = []) =>
+  [...items].sort(comparePinnedChats);
+
 const revokeObjectUrlSafe = (value) => {
   const url = String(value || "");
   if (!url) return;
@@ -2691,7 +2724,9 @@ useEffect(() => {
       if (!isActive || !idbCached) return;
       if (!Array.isArray(idbCached.chats) || idbCached.chats.length === 0)
         return;
-      const normalizedCached = idbCached.chats.map(normalizeChatSummary);
+      const normalizedCached = sortPinnedChatsFirst(
+        idbCached.chats.map(normalizeChatSummary),
+      );
       setChats((prev) => (prev.length ? prev : normalizedCached));
       setLoadingChats(false);
     })();
@@ -3106,6 +3141,10 @@ useEffect(() => {
   const activeHeaderAvatarIcon = isActiveSavedChat ? (
     <Bookmark size={18} className="text-white" />
   ) : null;
+  const uploadConfig = useMemo(() => resolveUploadConfig(user), [
+    user?.fileUploadDisabled,
+    user?.fileUploadMaxSizeBytes,
+  ]);
 
   useEffect(() => {
     if (canSendInActiveChat) return;
@@ -5032,11 +5071,7 @@ const peerStatusLabel = !activeHeaderPeer || activeHeaderPeer?.isDeleted
       const list = (Array.isArray(data.chats) ? data.chats : []).map(
         normalizeChatSummary,
       );
-      list.sort((a, b) => {
-        const aTime = a.last_time ? parseServerDate(a.last_time).getTime() : 0;
-        const bTime = b.last_time ? parseServerDate(b.last_time).getTime() : 0;
-        return bTime - aTime;
-      });
+      list.sort(comparePinnedChats);
       const deduped = [];
       const dmByPeer = new Map();
       list.forEach((chat) => {
@@ -5078,13 +5113,9 @@ const peerStatusLabel = !activeHeaderPeer || activeHeaderPeer?.isDeleted
       });
       const dmList = Array.from(dmByPeer.values());
       const merged = [...deduped, ...dmList];
-      merged.sort((a, b) => {
-        const aTime = a.last_time ? parseServerDate(a.last_time).getTime() : 0;
-        const bTime = b.last_time ? parseServerDate(b.last_time).getTime() : 0;
-        return bTime - aTime;
-      });
+      const sortedMerged = sortPinnedChatsFirst(merged);
       const normalizeFetchedChats = (prevChats = []) =>
-        merged
+        sortedMerged
           .map((chat) => {
             const muted = Boolean(Number(chat?.muted || 0));
             const files = Array.isArray(chat?.last_message_files)
@@ -5263,8 +5294,8 @@ const peerStatusLabel = !activeHeaderPeer || activeHeaderPeer?.isDeleted
 
   function handleVoiceRecorded(payload) {
     if (!payload?.file) return;
-    if (!CHAT_PAGE_CONFIG.fileUploadEnabled) {
-      setUploadError("File uploads are disabled on this server.");
+    if (!uploadConfig.fileUploadEnabled) {
+      setUploadError("File uploads are disabled for this account.");
       return;
     }
     if (fileUploadInProgress || activeUploadProgress !== null) {
@@ -5281,18 +5312,18 @@ const peerStatusLabel = !activeHeaderPeer || activeHeaderPeer?.isDeleted
     }
     const file = payload.file;
     const sizeBytes = Number(file.size || 0);
-    if (sizeBytes > CHAT_PAGE_CONFIG.maxFileSizeBytes) {
+    if (sizeBytes > uploadConfig.maxFileSizeBytes) {
       setUploadError(
         `Each file must be smaller than ${formatBytesAsMb(
-          CHAT_PAGE_CONFIG.maxFileSizeBytes,
+          uploadConfig.maxFileSizeBytes,
         )}.`,
       );
       return;
     }
-    if (sizeBytes > CHAT_PAGE_CONFIG.maxTotalUploadBytes) {
+    if (sizeBytes > uploadConfig.maxTotalUploadBytes) {
       setUploadError(
         `Total upload size cannot exceed ${formatBytesAsMb(
-          CHAT_PAGE_CONFIG.maxTotalUploadBytes,
+          uploadConfig.maxTotalUploadBytes,
         )}.`,
       );
       return;
@@ -5501,8 +5532,8 @@ const peerStatusLabel = !activeHeaderPeer || activeHeaderPeer?.isDeleted
   }
 
   async function handleUploadFilesSelected(fileList, uploadType, append = false) {
-    if (!CHAT_PAGE_CONFIG.fileUploadEnabled) {
-      setUploadError("File uploads are disabled on this server.");
+    if (!uploadConfig.fileUploadEnabled) {
+      setUploadError("File uploads are disabled for this account.");
       return;
     }
     if (fileUploadInProgress || activeUploadProgress !== null) {
@@ -5523,19 +5554,19 @@ const peerStatusLabel = !activeHeaderPeer || activeHeaderPeer?.isDeleted
     const existing = append ? pendingUploadFiles : [];
     const combinedCount = existing.length + incoming.length;
 
-    if (combinedCount > CHAT_PAGE_CONFIG.maxFilesPerMessage) {
+    if (combinedCount > uploadConfig.maxFilesPerMessage) {
       setUploadError(
-        `Maximum ${CHAT_PAGE_CONFIG.maxFilesPerMessage} files per message.`,
+        `Maximum ${uploadConfig.maxFilesPerMessage} files per message.`,
       );
       return;
     }
     const oversize = incoming.find(
-      (file) => Number(file.size || 0) > CHAT_PAGE_CONFIG.maxFileSizeBytes,
+      (file) => Number(file.size || 0) > uploadConfig.maxFileSizeBytes,
     );
     if (oversize) {
       setUploadError(
         `Each file must be smaller than ${formatBytesAsMb(
-          CHAT_PAGE_CONFIG.maxFileSizeBytes,
+          uploadConfig.maxFileSizeBytes,
         )}.`,
       );
       return;
@@ -5546,10 +5577,10 @@ const peerStatusLabel = !activeHeaderPeer || activeHeaderPeer?.isDeleted
     );
     const incomingBytes = incoming.reduce((sum, file) => sum + Number(file.size || 0), 0);
     const totalBytes = existingBytes + incomingBytes;
-    if (totalBytes > CHAT_PAGE_CONFIG.maxTotalUploadBytes) {
+    if (totalBytes > uploadConfig.maxTotalUploadBytes) {
       setUploadError(
         `Total upload size cannot exceed ${formatBytesAsMb(
-          CHAT_PAGE_CONFIG.maxTotalUploadBytes,
+          uploadConfig.maxTotalUploadBytes,
         )}.`,
       );
       return;
@@ -7258,7 +7289,7 @@ const peerStatusLabel = !activeHeaderPeer || activeHeaderPeer?.isDeleted
         userColor={userColor}
         profileError={profileError}
         passwordError={passwordError}
-        fileUploadEnabled={CHAT_PAGE_CONFIG.fileUploadEnabled}
+        fileUploadEnabled={uploadConfig.fileUploadEnabled}
         notificationsSupported={notificationsSupported}
         notificationPermission={notificationPermission}
         notificationsEnabled={notificationsEnabled}
@@ -7353,7 +7384,7 @@ const peerStatusLabel = !activeHeaderPeer || activeHeaderPeer?.isDeleted
         onUserScrollIntent={handleUserScrollIntent}
         onFloatingDayNavigate={handleFloatingDayNavigate}
         canSwipeReply={canSwipeReply}
-        fileUploadEnabled={CHAT_PAGE_CONFIG.fileUploadEnabled}
+        fileUploadEnabled={uploadConfig.fileUploadEnabled}
         fileUploadInProgress={fileUploadInProgress || activeUploadProgress !== null}
         showComposer={canSendInActiveChat}
         isChannelMuted={activeChatMuted}
