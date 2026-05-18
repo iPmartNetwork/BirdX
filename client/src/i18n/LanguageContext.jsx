@@ -1,4 +1,11 @@
-import { createContext, useCallback, useContext, useEffect, useMemo, useState } from "react";
+import {
+  createContext,
+  useCallback,
+  useContext,
+  useLayoutEffect,
+  useMemo,
+  useState,
+} from "react";
 
 export const LANGUAGE_STORAGE_KEY = "birdx-language";
 
@@ -27,6 +34,10 @@ const TRANSLATIONS = {
     "settings.language": "Language",
     "settings.savedMessages": "Saved messages",
     "settings.notifications": "Notifications",
+    "settings.notifications.enable": "Enable notifications",
+    "settings.notifications.testNotification": "Test notification",
+    "settings.notifications.sent": "Sent",
+    "settings.notifications.test": "Test",
     "settings.adminPanel": "Admin panel",
     "settings.whatsNew": "What's new",
     "settings.about": "About",
@@ -35,6 +46,7 @@ const TRANSLATIONS = {
     "settings.darkMode": "Dark mode",
     "settings.back": "Back",
     "settings.done": "Done",
+    "settings.close": "Close",
     "settings.language.title": "Language",
     "settings.language.subtitle": "Choose the interface language and layout direction for this device.",
     "settings.language.current": "Current language",
@@ -79,6 +91,10 @@ const TRANSLATIONS = {
     "settings.language": "زبان",
     "settings.savedMessages": "پیام‌های ذخیره‌شده",
     "settings.notifications": "اعلان‌ها",
+    "settings.notifications.enable": "فعال‌سازی اعلان‌ها",
+    "settings.notifications.testNotification": "اعلان آزمایشی",
+    "settings.notifications.sent": "ارسال شد",
+    "settings.notifications.test": "تست",
     "settings.adminPanel": "پنل مدیریت",
     "settings.whatsNew": "تازه‌ها",
     "settings.about": "درباره",
@@ -87,6 +103,7 @@ const TRANSLATIONS = {
     "settings.darkMode": "حالت تاریک",
     "settings.back": "بازگشت",
     "settings.done": "تمام",
+    "settings.close": "بستن",
     "settings.language.title": "زبان",
     "settings.language.subtitle": "زبان رابط کاربری و جهت نمایش این دستگاه را انتخاب کنید.",
     "settings.language.current": "زبان فعلی",
@@ -168,7 +185,7 @@ export function LanguageProvider({ children }) {
     [language],
   );
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     if (typeof document === "undefined") return;
     const root = document.documentElement;
     root.setAttribute("lang", currentLanguage.htmlLang);
