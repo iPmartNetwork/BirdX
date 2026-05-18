@@ -25,7 +25,7 @@ export function LanguageSettingsPanel({ onClose, variant = "desktop" }) {
               {t("settings.language.current")}
             </p>
             <p className="mt-1 text-xs leading-5 text-slate-500 dark:text-slate-400">
-              {currentLanguage.nativeName} ·{" "}
+              {currentLanguage.nativeName} /{" "}
               {currentLanguage.dir === "rtl"
                 ? t("settings.language.rtl")
                 : t("settings.language.ltr")}
@@ -45,7 +45,7 @@ export function LanguageSettingsPanel({ onClose, variant = "desktop" }) {
               key={item.code}
               type="button"
               onClick={() => setLanguage(item.code)}
-              className={`flex w-full items-center justify-between gap-3 rounded-2xl border px-4 py-3 text-left transition ${
+              className={`flex w-full items-center justify-between gap-3 rounded-2xl border px-4 py-3 text-start transition ${
                 active
                   ? "border-emerald-400 bg-emerald-50 text-emerald-700 shadow-sm dark:border-emerald-400/70 dark:bg-emerald-500/15 dark:text-emerald-100"
                   : "border-emerald-200/70 bg-white/90 text-slate-700 hover:border-emerald-300 hover:bg-emerald-50 dark:border-emerald-500/30 dark:bg-slate-900/50 dark:text-slate-200 dark:hover:bg-emerald-500/10"
@@ -60,7 +60,7 @@ export function LanguageSettingsPanel({ onClose, variant = "desktop" }) {
                     : t("settings.language.english")}
                 </span>
                 <span className="mt-0.5 block text-xs opacity-75">
-                  {item.nativeName} ·{" "}
+                  {item.nativeName} /{" "}
                   {item.dir === "rtl"
                     ? t("settings.language.rtl")
                     : t("settings.language.ltr")}
@@ -73,7 +73,7 @@ export function LanguageSettingsPanel({ onClose, variant = "desktop" }) {
       </div>
 
       <p className="rounded-2xl border border-slate-200/70 bg-slate-50/80 px-4 py-3 text-xs leading-5 text-slate-500 dark:border-slate-700/80 dark:bg-slate-900/70 dark:text-slate-400">
-        {t("settings.language.saved")} · {t("settings.language.note")}
+        {t("settings.language.saved")} / {t("settings.language.note")}
       </p>
 
       <div className="flex items-center justify-end pt-1">
