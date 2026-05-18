@@ -24,7 +24,7 @@ export const DataSettingsPanel = memo(function DataSettingsPanel({
   const listPadding = isMobile ? "px-3 py-3" : "px-4 py-3";
   const labelSize = isMobile ? "text-xs" : "text-sm";
   const sizeText = isMobile ? "text-[10px]" : "text-xs";
-  const buttonBase = `flex w-full items-center justify-between rounded-2xl border ${listPadding} text-left ${labelSize} font-semibold transition-colors duration-150`;
+  const buttonBase = `flex w-full items-center justify-between rounded-2xl border ${listPadding} text-start ${labelSize} font-semibold transition-colors duration-150`;
   const buttonHover =
     "hover:border-emerald-300 hover:bg-emerald-50 dark:hover:bg-emerald-500/10";
   const buttonTheme =
