@@ -123,7 +123,7 @@ import {
   toggleMessageReaction,
 } from "./db.js";
 
-process.title = "birdx.service";
+process.title = "songbird-server";
 
 const app = express();
 const serverDir = path.dirname(fileURLToPath(import.meta.url));
@@ -249,12 +249,6 @@ const FILE_UPLOAD_MAX_SIZE = readEnvInt(
   { min: 1024 },
 );
 
-const FILE_UPLOAD_HARD_MAX_SIZE = readEnvInt(
-  "FILE_UPLOAD_HARD_MAX_SIZE",
-  Math.max(FILE_UPLOAD_MAX_SIZE, 1024 * 1024 * 1024),
-  { min: FILE_UPLOAD_MAX_SIZE },
-);
-
 const FILE_UPLOAD_MAX_FILES = readEnvInt("FILE_UPLOAD_MAX_FILES", 10, {
   min: 1,
 });
@@ -339,7 +333,6 @@ const uploadTools = createUploadTools({
   uploadRootDir,
   avatarUploadRootDir,
   fileUploadMaxSize: FILE_UPLOAD_MAX_SIZE,
-  fileUploadHardMaxSize: FILE_UPLOAD_HARD_MAX_SIZE,
   fileUploadMaxFiles: FILE_UPLOAD_MAX_FILES,
   fileUploadMaxTotalSize: FILE_UPLOAD_MAX_TOTAL_SIZE,
   storageEncryption,
@@ -538,7 +531,6 @@ const apiDeps = {
   APP_DEBUG,
   AVATAR_FILE_LIMITS,
   FILE_UPLOAD,
-  FILE_UPLOAD_HARD_MAX_SIZE,
   MESSAGE_FILE_LIMITS,
   MESSAGE_FILE_RETENTION_DAYS,
   MESSAGE_TEXT_RETENTION_DAYS,
@@ -769,7 +761,7 @@ app.use((err, req, res, next) => {
       }
 
       return res.status(400).json({
-        error: `Each file must be smaller than ${Math.round(MESSAGE_FILE_LIMITS.maxHardFileSizeBytes / (1024 * 1024))} MB.`,
+        error: `Each file must be smaller than ${Math.round(MESSAGE_FILE_LIMITS.maxFileSizeBytes / (1024 * 1024))} MB.`,
       });
     }
 
@@ -953,42 +945,7 @@ const io = new SocketIOServer(httpServer, {
 const activeCalls = new Map();
 const liveCalls = new Map();
 const callDisconnectTimers = new Map();
-const activeCallTimers = new Map();
 const CALL_DISCONNECT_GRACE_MS = 45000;
-const CALL_RING_TIMEOUT_MS = 45000;
-
-function normalizeCallType(value) {
-  return String(value || "voice").toLowerCase() === "video" ? "video" : "voice";
-}
-
-function clearActiveCallTimeout(roomId) {
-  const timer = activeCallTimers.get(roomId);
-  if (!timer) return;
-  clearTimeout(timer);
-  activeCallTimers.delete(roomId);
-}
-
-function scheduleActiveCallTimeout(roomId) {
-  if (!roomId) return;
-  clearActiveCallTimeout(roomId);
-  const timer = setTimeout(() => {
-    activeCallTimers.delete(roomId);
-    const activeCall = activeCalls.get(roomId);
-    if (!activeCall) return;
-    activeCalls.delete(roomId);
-    liveCalls.delete(roomId);
-    finishCallLog({
-      roomId,
-      status: "missed",
-      reason: "missed",
-    });
-    io.to(roomId).emit("call-ended", { roomId, reason: "missed" });
-  }, CALL_RING_TIMEOUT_MS);
-  if (typeof timer.unref === "function") {
-    timer.unref();
-  }
-  activeCallTimers.set(roomId, timer);
-}
 
 function clearCallDisconnectTimer(roomId) {
   const timer = callDisconnectTimers.get(roomId);
@@ -1001,7 +958,6 @@ function scheduleCallDisconnectEnd(roomId) {
   if (!roomId || callDisconnectTimers.has(roomId)) return;
   const timer = setTimeout(() => {
     callDisconnectTimers.delete(roomId);
-    clearActiveCallTimeout(roomId);
     activeCalls.delete(roomId);
     liveCalls.delete(roomId);
     finishCallLog({
@@ -1023,6 +979,10 @@ function parseCallRoomChatId(roomId) {
   return Number(match[1] || 0);
 }
 
+function normalizeCallType(callType) {
+  return String(callType || "voice").toLowerCase() === "video" ? "video" : "voice";
+}
+
 async function notifyIncomingCallByPush({
   roomId,
   chatId,
@@ -1030,6 +990,7 @@ async function notifyIncomingCallByPush({
   callerUserId,
   callerName,
 }) {
+  const normalizedCallType = normalizeCallType(callType);
   const targetChatId = Number(chatId || parseCallRoomChatId(roomId) || 0);
   if (!targetChatId) return;
   const chat = findChatById(targetChatId);
@@ -1052,14 +1013,13 @@ async function notifyIncomingCallByPush({
     );
   if (!recipientIds.length) return;
 
-  const callTypeLabel = normalizeCallType(callType);
   await sendPushNotificationToUsers(recipientIds, {
-    title: `Incoming ${callTypeLabel} call`,
+    title: `Incoming ${normalizedCallType} call`,
     body: `${callerName || "Someone"} is calling...`,
     data: {
       type: "incoming_call",
-      callType: callTypeLabel,
       chatId: targetChatId,
+      callType: normalizedCallType,
       roomId,
       url: `/chat?openChatId=${encodeURIComponent(String(targetChatId))}`,
     },
@@ -1102,7 +1062,6 @@ io.on("connection", (socket) => {
       typeof payload === "object" ? Number(payload?.userId || 0) || null : null;
     console.log("LEAVE CALL:", socket.id, roomId);
     clearCallDisconnectTimer(roomId);
-    clearActiveCallTimeout(roomId);
     activeCalls.delete(roomId);
     liveCalls.delete(roomId);
     finishCallLog({
@@ -1115,14 +1074,13 @@ io.on("connection", (socket) => {
     socket.to(roomId).emit("call-ended", { roomId });
   });
 
-  socket.on("call-user", ({ roomId, chatId, callerUserId, callerUsername, callerName, callType }) => {
+  socket.on("call-user", ({ roomId, chatId, callType, callerUserId, callerUsername, callerName }) => {
     if (!roomId) return;
+    const normalizedCallType = normalizeCallType(callType);
     clearCallDisconnectTimer(roomId);
-    clearActiveCallTimeout(roomId);
     socket.join(roomId);
     socketCallRooms.add(roomId);
 
-    const normalizedCallType = normalizeCallType(callType);
     const payload = {
       roomId,
       chatId: Number(chatId || parseCallRoomChatId(roomId) || 0) || null,
@@ -1144,7 +1102,6 @@ io.on("connection", (socket) => {
       participantUserIds,
       callType: normalizedCallType,
     });
-    scheduleActiveCallTimeout(roomId);
 
     console.log("CALL USER:", socket.id, roomId, callerName);
     console.log(
@@ -1164,7 +1121,6 @@ io.on("connection", (socket) => {
     if (!roomId) return;
     console.log("ACCEPT CALL:", socket.id, roomId);
     clearCallDisconnectTimer(roomId);
-    clearActiveCallTimeout(roomId);
     socket.join(roomId);
     socketCallRooms.add(roomId);
     const activeCall = activeCalls.get(roomId);
@@ -1180,7 +1136,6 @@ io.on("connection", (socket) => {
     if (!roomId) return;
     console.log("REJECT CALL:", socket.id, roomId);
     clearCallDisconnectTimer(roomId);
-    clearActiveCallTimeout(roomId);
     activeCalls.delete(roomId);
     finishCallLog({
       roomId,
