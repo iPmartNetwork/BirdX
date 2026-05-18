@@ -2,6 +2,19 @@
 
 All notable changes to BirdX are documented in this file.
 
+## v2.5.1 - 2026-05-18
+
+### Added
+
+- Added the first multilingual interface foundation with English and Persian language support.
+- Added a Language settings panel that persists the selected language on each device.
+- Added global `lang` and `dir` handling so Persian switches the app shell into RTL layout.
+
+### Changed
+
+- Localized the Settings, Data, Language, and About surfaces as the first translated UI pass.
+- Bumped app, server, client, service-worker cache, and documentation versions to `2.5.1`.
+
 ## v2.5.0 - 2026-05-09
 
 ### Added
