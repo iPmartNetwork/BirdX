@@ -7,6 +7,8 @@ import { NICKNAME_MAX, USERNAME_MAX } from "../../../utils/nameLimits.js";
 import { InlineError } from "../common/InlineError.jsx";
 import { AboutSettingsPanel } from "../panels/AboutSettingsPanel.jsx";
 import { DataSettingsPanel } from "../panels/DataSettingsPanel.jsx";
+import { LanguageSettingsPanel } from "../panels/LanguageSettingsPanel.jsx";
+import { useLanguage } from "../../../i18n/LanguageContext.jsx";
 import ConfirmPasswordModal from "../../modals/ConfirmPasswordModal.jsx";
 import Avatar from "../../common/Avatar.jsx";
 
@@ -36,6 +38,7 @@ export function DesktopSettingsModal({
   appInfoLoading,
   appInfoError,
 }) {
+  const { t } = useLanguage();
   const [showCurrentPassword, setShowCurrentPassword] = useState(false);
   const [showNewPassword, setShowNewPassword] = useState(false);
   const [showConfirmPassword, setShowConfirmPassword] = useState(false);
@@ -60,12 +63,14 @@ export function DesktopSettingsModal({
         <div className="flex items-center justify-between border-b border-emerald-100/70 px-6 py-5 dark:border-emerald-500/20">
           <h3 className="text-lg font-semibold text-emerald-700 dark:text-emerald-200">
             {settingsPanel === "profile"
-              ? "Edit profile"
+              ? t("settings.profile")
               : settingsPanel === "security"
-                ? "Security"
+                ? t("settings.security")
                 : settingsPanel === "data"
-                  ? "Data"
-                  : "About"}
+                  ? t("settings.data")
+                  : settingsPanel === "language"
+                    ? t("settings.language")
+                    : t("settings.about")}
           </h3>
           <button
             type="button"
@@ -363,6 +368,12 @@ export function DesktopSettingsModal({
               user={currentUser}
               variant="desktop"
             />
+          </div>
+        ) : null}
+
+        {settingsPanel === "language" ? (
+          <div className="app-scroll mt-4 min-h-0 flex-1 overflow-y-auto px-6 pb-6">
+            <LanguageSettingsPanel onClose={handleClosePanel} variant="desktop" />
           </div>
         ) : null}
 
