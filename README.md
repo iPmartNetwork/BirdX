@@ -1,6 +1,6 @@
 # BirdX
 
-[![Version](https://img.shields.io/badge/version-2.5.0-10b981)](./VERSION)
+[![Version](https://img.shields.io/badge/version-2.5.1-10b981)](./VERSION)
 [![License](https://img.shields.io/badge/license-MIT-blue)](./LICENSE)
 [![Node.js](https://img.shields.io/badge/node-%3E%3D24.0.0-339933)](https://nodejs.org/)
 
@@ -16,7 +16,7 @@ https://github.com/bllackbull/Songbird
 
 ## Current Release
 
-`2.5.0`
+`2.5.1`
 
 This release starts the call experience upgrade, beginning with persistent call history while keeping the group/channel role-management and mobile voice-call reliability fixes from v2.4.2.
 
@@ -149,7 +149,7 @@ APP_DEBUG=false
 
 # Auth
 ACCOUNT_CREATION=true
-ADMIN_USERNAMES=admin123
+ADMIN_USERNAMES=ipmart
 
 # File Upload
 FILE_UPLOAD=true
