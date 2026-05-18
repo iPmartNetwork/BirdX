@@ -1,7 +1,9 @@
 import { useEffect, useRef, useState } from "react";
 import { Moon, Sun } from "../../../icons/lucide.js";
+import { useLanguage } from "../../../i18n/LanguageContext.jsx";
 
 export function ThemeButton({ isDark, toggleTheme, setIsDark, thick = false }) {
+  const { t } = useLanguage();
   const [themeToggleAnimating, setThemeToggleAnimating] = useState(false);
   const themeAnimTimeoutRef = useRef(null);
 
@@ -47,7 +49,7 @@ export function ThemeButton({ isDark, toggleTheme, setIsDark, thick = false }) {
           className={`icon-anim-spin-left ${themeToggleAnimating ? "icon-theme-enter-moon" : ""}`}
         />
       )}
-      {isDark ? "Light mode" : "Dark mode"}
+      {isDark ? t("settings.lightMode") : t("settings.darkMode")}
     </button>
   );
 }
