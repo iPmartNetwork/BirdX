@@ -99,7 +99,7 @@ export function MobileSettingsPanel({
             <button
               type="button"
               onClick={onOpenOwnProfile}
-              className="group flex w-full items-center gap-3 rounded-xl border border-transparent px-1 py-1 text-left transition hover:border-emerald-300 hover:bg-emerald-50/50 hover:shadow-[0_0_16px_rgba(16,185,129,0.18)] dark:hover:border-emerald-500/30 dark:hover:bg-emerald-500/10"
+              className="group flex w-full items-center gap-3 rounded-xl border border-transparent px-1 py-1 text-start transition hover:border-emerald-300 hover:bg-emerald-50/50 hover:shadow-[0_0_16px_rgba(16,185,129,0.18)] dark:hover:border-emerald-500/30 dark:hover:bg-emerald-500/10"
             >
               <Avatar
                 src={user.avatarUrl}
@@ -154,7 +154,7 @@ export function MobileSettingsPanel({
               type="button"
               onClick={() => setSettingsPanel(null)}
               className="inline-flex items-center justify-center rounded-full border border-emerald-200 p-2 text-emerald-700 transition hover:bg-emerald-50 dark:border-emerald-500/30 dark:text-emerald-200 dark:hover:bg-emerald-500/10"
-              aria-label="Back"
+              aria-label={t("settings.back")}
             >
               <ArrowLeft size={18} />
             </button>
@@ -327,7 +327,7 @@ export function MobileSettingsPanel({
               type="button"
               onClick={() => setSettingsPanel(null)}
               className="inline-flex items-center justify-center rounded-full border border-emerald-200 p-2 text-emerald-700 transition hover:bg-emerald-50 dark:border-emerald-500/30 dark:text-emerald-200 dark:hover:bg-emerald-500/10"
-              aria-label="Back"
+              aria-label={t("settings.back")}
             >
               <ArrowLeft size={18} />
             </button>
@@ -457,7 +457,7 @@ export function MobileSettingsPanel({
               type="button"
               onClick={() => setSettingsPanel(null)}
               className="inline-flex items-center justify-center rounded-full border border-emerald-200 p-2 text-emerald-700 transition hover:bg-emerald-50 dark:border-emerald-500/30 dark:text-emerald-200 dark:hover:bg-emerald-500/10"
-              aria-label="Back"
+              aria-label={t("settings.back")}
             >
               <ArrowLeft size={18} />
             </button>
