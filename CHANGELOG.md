@@ -12,7 +12,7 @@ All notable changes to BirdX are documented in this file.
 
 ### Changed
 
-- Localized the Settings, Data, Language, and About surfaces as the first translated UI pass.
+- Localized the Settings, Data, Language, Notifications, and About surfaces as the first translated UI pass.
 - Bumped app, server, client, service-worker cache, and documentation versions to `2.5.1`.
 
 ## v2.5.0 - 2026-05-09
