@@ -1,6 +1,7 @@
 import { Suspense, lazy, useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import logo from './assets/birdx-logo.svg'
+import { LanguageProvider } from './i18n/LanguageContext.jsx'
 import { APP_CONFIG } from './settings/appConfig.js'
 import InstallBar from './components/pwa/InstallBar.jsx'
 import InstallGuideModal from './components/pwa/InstallGuideModal.jsx'
@@ -191,12 +192,6 @@ export default function App() {
       status: data.status || 'online',
       role: data.role || 'user',
       isAdmin: Boolean(data.isAdmin),
-      fileUploadDisabled: Boolean(data.fileUploadDisabled),
-      fileUploadMaxSizeBytes:
-        Number.isFinite(Number(data.fileUploadMaxSizeBytes)) &&
-        Number(data.fileUploadMaxSizeBytes) > 0
-          ? Number(data.fileUploadMaxSizeBytes)
-          : null,
     }
   }
 
@@ -788,12 +783,6 @@ export default function App() {
         status: data.status || 'online',
         role: data.role || 'user',
         isAdmin: Boolean(data.isAdmin),
-        fileUploadDisabled: Boolean(data.fileUploadDisabled),
-        fileUploadMaxSizeBytes:
-          Number.isFinite(Number(data.fileUploadMaxSizeBytes)) &&
-          Number(data.fileUploadMaxSizeBytes) > 0
-            ? Number(data.fileUploadMaxSizeBytes)
-            : null,
       }
       const nextUser = await resolveSessionUserWithRetry(fallbackUser)
       setUser(nextUser)
@@ -886,7 +875,8 @@ export default function App() {
     : undefined
 
   return (
-    <div className={appShellClass} style={appContainerStyle}>
+    <LanguageProvider>
+      <div className={appShellClass} style={appContainerStyle}>
       <div
         className={
           isAuthRoute
@@ -1079,6 +1069,7 @@ export default function App() {
         isDesktop={isDesktopViewport}
         onClose={() => setShowInstallGuide(false)}
       />
-    </div>
+      </div>
+    </LanguageProvider>
   )
 }
