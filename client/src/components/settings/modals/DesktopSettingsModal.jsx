@@ -76,6 +76,7 @@ export function DesktopSettingsModal({
             type="button"
             onClick={handleClosePanel}
             className="flex items-center justify-center rounded-full border border-rose-200 p-2 text-rose-600 transition hover:border-rose-300 hover:bg-rose-50 hover:shadow-[0_0_16px_rgba(244,63,94,0.2)] dark:border-rose-500/30 dark:text-rose-200 dark:hover:bg-rose-500/10"
+            aria-label={t("settings.close")}
           >
             <Close size={18} className="icon-anim-pop" />
           </button>
