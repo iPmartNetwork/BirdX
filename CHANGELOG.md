@@ -2,6 +2,21 @@
 
 All notable changes to BirdX are documented in this file.
 
+## v2.5.2 - 2026-05-18
+
+### Added
+
+- Added minimized call mode with a wider floating call card.
+- Added compact video-call controls for microphone, camera, camera switching, device selection, reconnect, and desktop screen sharing.
+- Added automatic video-call control hiding after 3 seconds with tap or click to reveal.
+- Added connection quality feedback for active calls.
+
+### Changed
+
+- Refined video-call toolbar styling and hid screen sharing on mobile.
+- Improved active-call cleanup and recovery for camera, screen share, and ICE reconnect handling.
+- Bumped app, server, client, service-worker cache, and documentation versions to `2.5.2`.
+
 ## v2.5.1 - 2026-05-18
 
 ### Added
