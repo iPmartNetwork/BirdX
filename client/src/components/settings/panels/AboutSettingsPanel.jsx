@@ -74,9 +74,9 @@ export function AboutSettingsPanel({
   const ownerLabel = ABOUT_CONTENT.copyright?.ownerLabel || "iPmartNetwork";
   const year = new Date().getFullYear();
   const rowBase =
-    "flex w-full items-center justify-between gap-3 rounded-2xl border border-emerald-200/70 bg-white/90 px-4 py-3 text-left text-sm font-semibold text-emerald-700 dark:border-emerald-500/30 dark:bg-slate-900/50 dark:text-emerald-200";
+    "flex w-full items-center justify-between gap-3 rounded-2xl border border-emerald-200/70 bg-white/90 px-4 py-3 text-start text-sm font-semibold text-emerald-700 dark:border-emerald-500/30 dark:bg-slate-900/50 dark:text-emerald-200";
   const actionButtonBase =
-    "inline-flex h-7 min-w-[58px] items-center justify-center rounded-full px-3 py-1 text-xs font-semibold leading-none transition";
+    "inline-flex h-7 min-w-[58px] items-center justify-center gap-1 rounded-full px-3 py-1 text-xs font-semibold leading-none transition";
 
   useEffect(() => {
     return () => {
@@ -198,7 +198,7 @@ export function AboutSettingsPanel({
             className={`${actionButtonBase} ${currentButtonStyle.className}`}
           >
             {currentButtonStyle.icon}
-            <span className="ml-1">{currentButtonStyle.label}</span>
+            <span>{currentButtonStyle.label}</span>
           </button>
         </div>
 
