@@ -121,12 +121,6 @@ export default function ChatWindowPanel({
   permissionsPrompt = null,
   copyToastVisible = false,
 }) {
-  const startVideoCallHandler =
-    typeof onStartVideoCall === "function"
-      ? onStartVideoCall
-      : typeof onStartCall === "function"
-        ? () => onStartCall("video")
-        : null;
   const MEDIA_CACHE_VERSION = 1;
   const MEDIA_CACHE_TTL_MS = 7 * 24 * 60 * 60 * 1000;
   const VIDEO_POSTER_CACHE_KEY = MEDIA_POSTER_CACHE_KEY;
@@ -1276,28 +1270,26 @@ export default function ChatWindowPanel({
               </>
             </ContextMenuSurface>
             {typeof onStartCall === "function" && !isGroupChat && !isChannelChat ? (
-              <div className="flex flex-shrink-0 items-center gap-2">
-                <button
-                  type="button"
-                  onClick={() => onStartCall("voice")}
-                  className="inline-flex h-9 w-9 flex-shrink-0 items-center justify-center rounded-full border border-emerald-200 bg-white/80 text-[0px] text-emerald-700 transition hover:border-emerald-300 hover:bg-emerald-50 hover:shadow-md dark:border-emerald-500/30 dark:bg-slate-950 dark:text-emerald-200 dark:hover:bg-emerald-500/10"
-                  aria-label="Start voice call"
-                  title="Voice call"
-                >
-                  <Phone size={17} strokeWidth={2.4} />
-                </button>
-                {typeof startVideoCallHandler === "function" ? (
-                  <button
-                    type="button"
-                    onClick={startVideoCallHandler}
-                    className="inline-flex h-9 w-9 flex-shrink-0 items-center justify-center rounded-full border border-emerald-200 bg-white/80 text-[0px] text-emerald-700 transition hover:border-emerald-300 hover:bg-emerald-50 hover:shadow-md dark:border-emerald-500/30 dark:bg-slate-950 dark:text-emerald-200 dark:hover:bg-emerald-500/10"
-                    aria-label="Start video call"
-                    title="Video call"
-                  >
-                    <Video size={17} strokeWidth={2.4} />
-                  </button>
-                ) : null}
-              </div>
+              <button
+                type="button"
+                onClick={onStartCall}
+                className="inline-flex h-9 w-9 flex-shrink-0 items-center justify-center rounded-full border border-emerald-200 bg-white/80 text-[0px] text-emerald-700 transition hover:border-emerald-300 hover:bg-emerald-50 hover:shadow-md dark:border-emerald-500/30 dark:bg-slate-950 dark:text-emerald-200 dark:hover:bg-emerald-500/10"
+                aria-label="Start voice call"
+                title="Voice call"
+              >
+                <Phone size={17} strokeWidth={2.4} />
+              </button>
+            ) : null}
+            {typeof onStartVideoCall === "function" && !isGroupChat && !isChannelChat ? (
+              <button
+                type="button"
+                onClick={onStartVideoCall}
+                className="inline-flex h-9 w-9 flex-shrink-0 items-center justify-center rounded-full border border-emerald-200 bg-white/80 text-[0px] text-emerald-700 transition hover:border-emerald-300 hover:bg-emerald-50 hover:shadow-md dark:border-emerald-500/30 dark:bg-slate-950 dark:text-emerald-200 dark:hover:bg-emerald-500/10"
+                aria-label="Start video call"
+                title="Video call"
+              >
+                <Video size={17} strokeWidth={2.4} />
+              </button>
             ) : null}
             {headerAvatarIcon ? (
               <ContextMenuSurface
