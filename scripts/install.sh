@@ -65,6 +65,7 @@ OS_ID=""
 OS_ID_LIKE=""
 DEPLOY_MODE="ip"
 DOMAIN_NAMES=()
+INVALID_DOMAIN_NAMES=()
 CERTBOT_EMAIL=""
 SERVER_PORT="$DEFAULT_SERVER_PORT"
 CLIENT_PORT="$DEFAULT_CLIENT_PORT"
@@ -404,6 +405,47 @@ prompt_text_retention_days() {
 is_ipv4_address() {
   local value="$1"
   [[ "$value" =~ ^([0-9]{1,3}\.){3}[0-9]{1,3}$ ]]
+}
+
+normalize_domain_name() {
+  local value="$1"
+  value="${value#"${value%%[![:space:]]*}"}"
+  value="${value%"${value##*[![:space:]]}"}"
+  value="$(printf "%s" "$value" | tr '[:upper:]' '[:lower:]')"
+  value="${value#http://}"
+  value="${value#https://}"
+  value="${value%%/*}"
+  value="${value%%:*}"
+  value="${value%.}"
+  printf "%s" "$value"
+}
+
+is_valid_domain_name() {
+  local value="$1"
+  [[ "$value" =~ ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?(\.[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?)+$ ]]
+}
+
+read_nginx_server_name_from_existing_config() {
+  if [[ ! -f "$NGINX_SITE_FILE" ]]; then
+    return 1
+  fi
+
+  local existing=""
+  existing="$(run_as_root_output awk '
+    /^[[:space:]]*server_name[[:space:]]+/ {
+      sub(/^[[:space:]]*server_name[[:space:]]+/, "")
+      sub(/;[[:space:]]*$/, "")
+      print
+      exit
+    }
+  ' "$NGINX_SITE_FILE" 2>/dev/null | tr -d '\r')" || existing=""
+
+  if [[ -n "$existing" ]]; then
+    NGINX_SERVER_NAME="$existing"
+    return 0
+  fi
+
+  return 1
 }
 
 detect_public_ip() {
@@ -963,7 +1005,7 @@ install_required_packages() {
     required_pkgs+=(coturn)
   fi
   if [[ "$CERT_MODE" == "certbot" && "$DEPLOY_MODE" == "domain" ]]; then
-    required_pkgs+=(python3-certbot-nginx)
+    required_pkgs+=(certbot)
   fi
   local missing_pkgs=()
   local pkg=""
@@ -1631,15 +1673,19 @@ sync_values_from_env() {
 parse_domain_input() {
   local raw="$1"
   DOMAIN_NAMES=()
+  INVALID_DOMAIN_NAMES=()
   local IFS=','
   local d
   for d in $raw; do
-    d="${d#"${d%%[![:space:]]*}"}"
-    d="${d%"${d##*[![:space:]]}"}"
-    d="${d#http://}"
-    d="${d#https://}"
-    d="${d%%/*}"
-    [[ -n "$d" ]] && DOMAIN_NAMES+=("$d")
+    d="$(normalize_domain_name "$d")"
+    if [[ -z "$d" ]]; then
+      continue
+    fi
+    if is_valid_domain_name "$d"; then
+      DOMAIN_NAMES+=("$d")
+    else
+      INVALID_DOMAIN_NAMES+=("$d")
+    fi
   done
   NGINX_SERVER_NAME="${DOMAIN_NAMES[*]}"
 }
@@ -1656,7 +1702,9 @@ collect_install_options() {
       raw_domains="${raw_domains%"${raw_domains##*[![:space:]]}"}"
       if [[ -n "$raw_domains" ]]; then
         parse_domain_input "$raw_domains"
-        if (( ${#DOMAIN_NAMES[@]} > 0 )); then
+        if (( ${#INVALID_DOMAIN_NAMES[@]} > 0 )); then
+          printf "Invalid domain(s): %s\n" "${INVALID_DOMAIN_NAMES[*]}"
+        elif (( ${#DOMAIN_NAMES[@]} > 0 )); then
           break
         fi
       fi
@@ -1701,7 +1749,13 @@ collect_install_options() {
   if [[ "$CERT_MODE" == "http" ]]; then
     CLIENT_PORT="$(prompt_client_port "$DEFAULT_CLIENT_PORT")"
   else
-    CLIENT_PORT="$(prompt_client_port "443")"
+    while true; do
+      CLIENT_PORT="$(prompt_client_port "443")"
+      if [[ "$CLIENT_PORT" != "80" ]]; then
+        break
+      fi
+      printf "HTTPS port cannot be 80 because port 80 is used for HTTP redirect and certificate checks.\n"
+    done
   fi
   if [[ "$CERT_MODE" != "http" ]]; then
     log "Using HTTP redirect on port 80 and HTTPS on port ${CLIENT_PORT}."
@@ -1812,14 +1866,31 @@ write_nginx_site_config() {
   local listen_line="listen ${CLIENT_PORT} default_server;"
   local ssl_block=""
   local acme_block=""
+  local redirect_acme_block=""
   local redirect_server_block=""
+  local redirect_port_suffix=""
 
-  if [[ "$mode" == "http" && "$DEPLOY_MODE" == "domain" && "$CERT_MODE" == "certbot" ]]; then
+  if [[ "$mode" == "http" && "$CERT_MODE" != "http" ]]; then
     listen_line="listen 80 default_server;"
+  fi
+
+  if [[ "$CERT_MODE" == "certbot" ]]; then
+    run_silent run_as_root mkdir -p "$ACME_WEBROOT/.well-known/acme-challenge" || return 1
+    redirect_acme_block=$(cat <<EOF
+
+  location /.well-known/acme-challenge/ {
+    root ${ACME_WEBROOT};
+    default_type "text/plain";
+  }
+EOF
+)
   fi
 
   if [[ "$mode" == "ssl" ]]; then
     listen_line="listen ${CLIENT_PORT} ssl default_server;"
+    if [[ "$CLIENT_PORT" != "443" ]]; then
+      redirect_port_suffix=":${CLIENT_PORT}"
+    fi
     ssl_block=$(cat <<EOF
   ssl_certificate ${cert_path};
   ssl_certificate_key ${key_path};
@@ -1828,47 +1899,23 @@ write_nginx_site_config() {
 EOF
 )
 
-    if [[ "$DEPLOY_MODE" == "ip" && "$CERT_MODE" == "certbot" ]]; then
+    if [[ "$CLIENT_PORT" != "80" ]]; then
       redirect_server_block=$(cat <<EOF
 
 server {
   listen 80;
   ${server_name_line}
-  location /.well-known/acme-challenge/ {
-    root ${ACME_WEBROOT};
-    default_type "text/plain";
+${redirect_acme_block}
+  location / {
+    return 301 https://\$host${redirect_port_suffix}\$request_uri;
   }
-  if (\$request_uri !~ "^/\\.well-known/acme-challenge/") {
-    return 301 https://\$host$( [[ "$CLIENT_PORT" == "443" ]] && printf "" || printf ":%s" "$CLIENT_PORT" )\$request_uri;
-  }
-}
-EOF
-)
-    elif [[ "$CLIENT_PORT" == "443" ]]; then
-      redirect_server_block=$(cat <<EOF
-
-server {
-  listen 80;
-  ${server_name_line}
-  return 301 https://\$host\$request_uri;
-}
-EOF
-)
-    elif [[ "$CLIENT_PORT" != "80" ]]; then
-      redirect_server_block=$(cat <<EOF
-
-server {
-  listen 80;
-  ${server_name_line}
-  return 301 https://\$host:${CLIENT_PORT}\$request_uri;
 }
 EOF
 )
     fi
   fi
 
-  if [[ "$mode" == "http" && "$DEPLOY_MODE" == "ip" && "$CERT_MODE" == "certbot" ]]; then
-    run_silent run_as_root mkdir -p "$ACME_WEBROOT"
+  if [[ "$mode" == "http" && "$CERT_MODE" == "certbot" ]]; then
     acme_block=$(cat <<EOF
 
   location /.well-known/acme-challenge/ {
@@ -1935,27 +1982,56 @@ EOF
 
 configure_nginx() {
   log "Preparing initial HTTP nginx configuration..."
-  write_nginx_site_config "http"
+  write_nginx_site_config "http" || return 1
 
-  run_as_root ln -sfn "$NGINX_SITE_FILE" "$NGINX_ENABLED_FILE"
+  run_as_root ln -sfn "$NGINX_SITE_FILE" "$NGINX_ENABLED_FILE" || return 1
   if run_as_root test -f /etc/nginx/sites-enabled/default; then
-    run_as_root rm -f /etc/nginx/sites-enabled/default
+    run_as_root rm -f /etc/nginx/sites-enabled/default || return 1
   fi
 
   log "Testing nginx configuration..."
-  run_as_root nginx -t
+  run_as_root nginx -t || return 1
   log "Reloading nginx..."
-  run_as_root systemctl reload nginx
+  run_as_root systemctl reload nginx || return 1
   log "Initial nginx configuration is active."
 }
 
 install_ssl_files_into_nginx() {
   local cert_path="$1"
   local key_path="$2"
+  local backup_file=""
 
-  write_nginx_site_config "ssl" "$cert_path" "$key_path"
-  run_as_root nginx -t
-  run_as_root systemctl reload nginx
+  if [[ -f "$NGINX_SITE_FILE" ]]; then
+    backup_file="${NGINX_SITE_FILE}.bak.$(date +%Y%m%d%H%M%S)"
+    run_silent run_as_root cp "$NGINX_SITE_FILE" "$backup_file" || return 1
+  fi
+
+  if ! write_nginx_site_config "ssl" "$cert_path" "$key_path"; then
+    warn "Failed to write nginx SSL config. Restoring previous nginx config."
+    if [[ -n "$backup_file" ]]; then
+      run_silent run_as_root cp "$backup_file" "$NGINX_SITE_FILE"
+    fi
+    return 1
+  fi
+  if ! run_as_root nginx -t; then
+    warn "Nginx SSL config test failed. Restoring previous nginx config."
+    if [[ -n "$backup_file" ]]; then
+      run_silent run_as_root cp "$backup_file" "$NGINX_SITE_FILE"
+      run_as_root nginx -t || true
+    fi
+    return 1
+  fi
+
+  if ! run_as_root systemctl reload nginx; then
+    warn "Nginx reload failed. Restoring previous nginx config."
+    if [[ -n "$backup_file" ]]; then
+      run_silent run_as_root cp "$backup_file" "$NGINX_SITE_FILE"
+      run_as_root nginx -t || true
+      run_as_root systemctl reload nginx || true
+    fi
+    return 1
+  fi
+
   log "Nginx SSL configured."
 }
 
@@ -1964,14 +2040,58 @@ configure_manual_ssl_files() {
     fail "Manual certificate files were not found."
   fi
 
-  run_silent run_as_root mkdir -p "$CERT_INSTALL_DIR"
-  run_silent run_as_root rm -f "$CERT_INSTALL_DIR/fullchain.pem" "$CERT_INSTALL_DIR/privkey.pem"
-  run_silent run_as_root cp -Lf "$MANUAL_CERT_FULLCHAIN_PATH" "$CERT_INSTALL_DIR/fullchain.pem"
-  run_silent run_as_root cp -Lf "$MANUAL_CERT_PRIVKEY_PATH" "$CERT_INSTALL_DIR/privkey.pem"
-  run_silent run_as_root chmod 644 "$CERT_INSTALL_DIR/fullchain.pem"
-  run_silent run_as_root chmod 600 "$CERT_INSTALL_DIR/privkey.pem"
+  local fullchain_target="$CERT_INSTALL_DIR/fullchain.pem"
+  local privkey_target="$CERT_INSTALL_DIR/privkey.pem"
+  local tmp_fullchain="$CERT_INSTALL_DIR/fullchain.pem.tmp.$$"
+  local tmp_privkey="$CERT_INSTALL_DIR/privkey.pem.tmp.$$"
+  local backup_fullchain=""
+  local backup_privkey=""
 
-  install_ssl_files_into_nginx "$CERT_INSTALL_DIR/fullchain.pem" "$CERT_INSTALL_DIR/privkey.pem"
+  run_silent run_as_root mkdir -p "$CERT_INSTALL_DIR" || return 1
+
+  if [[ -f "$fullchain_target" ]]; then
+    backup_fullchain="$CERT_INSTALL_DIR/fullchain.pem.bak.$(date +%Y%m%d%H%M%S)"
+    run_silent run_as_root cp -p "$fullchain_target" "$backup_fullchain" || return 1
+  fi
+  if [[ -f "$privkey_target" ]]; then
+    backup_privkey="$CERT_INSTALL_DIR/privkey.pem.bak.$(date +%Y%m%d%H%M%S)"
+    run_silent run_as_root cp -p "$privkey_target" "$backup_privkey" || return 1
+  fi
+
+  run_silent run_as_root cp -Lf "$MANUAL_CERT_FULLCHAIN_PATH" "$tmp_fullchain" || return 1
+  run_silent run_as_root cp -Lf "$MANUAL_CERT_PRIVKEY_PATH" "$tmp_privkey" || {
+    run_silent run_as_root rm -f "$tmp_fullchain"
+    return 1
+  }
+  run_silent run_as_root chmod 644 "$tmp_fullchain" || return 1
+  run_silent run_as_root chmod 600 "$tmp_privkey" || return 1
+  run_silent run_as_root mv -f "$tmp_fullchain" "$fullchain_target" || return 1
+  if ! run_silent run_as_root mv -f "$tmp_privkey" "$privkey_target"; then
+    if [[ -n "$backup_fullchain" ]]; then
+      run_silent run_as_root cp -p "$backup_fullchain" "$fullchain_target"
+    else
+      run_silent run_as_root rm -f "$fullchain_target"
+    fi
+    return 1
+  fi
+
+  if install_ssl_files_into_nginx "$fullchain_target" "$privkey_target"; then
+    log "Manual TLS certificate files installed into ${CERT_INSTALL_DIR}."
+    return 0
+  fi
+
+  warn "Manual TLS setup failed. Restoring previous certificate files when available."
+  if [[ -n "$backup_fullchain" ]]; then
+    run_silent run_as_root cp -p "$backup_fullchain" "$fullchain_target"
+  else
+    run_silent run_as_root rm -f "$fullchain_target"
+  fi
+  if [[ -n "$backup_privkey" ]]; then
+    run_silent run_as_root cp -p "$backup_privkey" "$privkey_target"
+  else
+    run_silent run_as_root rm -f "$privkey_target"
+  fi
+  return 1
 }
 
 install_lego_certificate_files() {
@@ -2074,63 +2194,43 @@ configure_ssl_if_needed() {
     files)
       log "Installing TLS certificate files into nginx..."
       configure_manual_ssl_files
-      return 0
+      return $?
       ;;
   esac
 
   if [[ "$DEPLOY_MODE" == "ip" ]]; then
     configure_lego_ip_ssl
-    return 0
+    return $?
   fi
 
-  local existing_certs
-  existing_certs="$(run_as_root certbot certificates 2>/dev/null)"
+  run_silent run_as_root mkdir -p "$ACME_WEBROOT/.well-known/acme-challenge" || return 1
 
-  local uncovered=()
+  local certbot_d_args=()
   local d
   for d in "${DOMAIN_NAMES[@]}"; do
-    local escaped
-    escaped="$(printf '%s' "$d" | sed 's/[.[\*^$]/\\&/g')"
-
-    if echo "$existing_certs" | grep -qP "^\s+Domains:.*\b${escaped}\b"; then
-      log "Domain ${d} already has a certificate. Will reconfigure nginx."
-    else
-      uncovered+=("$d")
-    fi
+    certbot_d_args+=(-d "$d")
   done
 
-  if (( ${#uncovered[@]} > 0 )); then
-    local certbot_d_args=()
-    for d in "${uncovered[@]}"; do
-      certbot_d_args+=(-d "$d")
-    done
-
-    log "Requesting SSL certificate for: ${uncovered[*]}"
-    run_as_root certbot certonly \
-      --nginx \
-      --https-port "$CLIENT_PORT" \
-      --non-interactive \
-      --agree-tos \
-      --email "$CERTBOT_EMAIL" \
-      "${certbot_d_args[@]}" || { log "ERROR: Certbot failed for: ${uncovered[*]}"; return 1; }
-
-    log "SSL certificate obtained for: ${uncovered[*]}"
-  else
-    log "All domains already have certificates. Skipping certificate request."
-  fi
+  log "Requesting or reusing SSL certificate for: ${DOMAIN_NAMES[*]}"
+  run_as_root certbot certonly \
+    --webroot \
+    --webroot-path "$ACME_WEBROOT" \
+    --non-interactive \
+    --agree-tos \
+    --email "$CERTBOT_EMAIL" \
+    --cert-name "${DOMAIN_NAMES[0]}" \
+    --expand \
+    "${certbot_d_args[@]}" || { warn "ERROR: Certbot failed for: ${DOMAIN_NAMES[*]}"; return 1; }
 
   log "Configuring nginx SSL for: ${DOMAIN_NAMES[*]}"
-  local all_d_args=()
-  for d in "${DOMAIN_NAMES[@]}"; do
-    all_d_args+=(-d "$d")
-  done
+  local cert_path="/etc/letsencrypt/live/${DOMAIN_NAMES[0]}/fullchain.pem"
+  local key_path="/etc/letsencrypt/live/${DOMAIN_NAMES[0]}/privkey.pem"
+  if ! run_as_root test -f "$cert_path" || ! run_as_root test -f "$key_path"; then
+    warn "Expected certificate files were not found under /etc/letsencrypt/live/${DOMAIN_NAMES[0]}."
+    return 1
+  fi
 
-  run_as_root certbot install \
-    --nginx \
-    --https-port "$CLIENT_PORT" \
-    --non-interactive \
-    --cert-name "${DOMAIN_NAMES[0]}" \
-    "${all_d_args[@]}" || { warn "ERROR: Failed to configure nginx SSL"; return 1; }
+  install_ssl_files_into_nginx "$cert_path" "$key_path" || return 1
 
   log "Nginx SSL configured for: ${DOMAIN_NAMES[*]}"
 }
@@ -2217,6 +2317,8 @@ update_nginx_runtime_values() {
     return 1
   fi
 
+  read_nginx_server_name_from_existing_config || true
+
   local backup_file="${NGINX_SITE_FILE}.bak.$(date +%Y%m%d%H%M%S)"
   run_silent run_as_root cp "$NGINX_SITE_FILE" "$backup_file"
 
@@ -2230,9 +2332,17 @@ update_nginx_runtime_values() {
   existing_key="$(run_as_root_output grep -E '^\s*ssl_certificate_key ' "$NGINX_SITE_FILE" | head -n 1 | sed -E 's/^\s*ssl_certificate_key\s+([^;]+);/\1/' | tr -d '\r\n')" || existing_key=""
 
   if [[ -n "$existing_cert" && -n "$existing_key" ]]; then
-    write_nginx_site_config "ssl" "$existing_cert" "$existing_key"
+    if ! write_nginx_site_config "ssl" "$existing_cert" "$existing_key"; then
+      warn "Failed to rewrite nginx config. Restoring previous config."
+      run_silent run_as_root cp "$backup_file" "$NGINX_SITE_FILE"
+      return 1
+    fi
   else
-    write_nginx_site_config "http"
+    if ! write_nginx_site_config "http"; then
+      warn "Failed to rewrite nginx config. Restoring previous config."
+      run_silent run_as_root cp "$backup_file" "$NGINX_SITE_FILE"
+      return 1
+    fi
   fi
 
   if run_as_root nginx -t; then
@@ -2539,9 +2649,17 @@ install_birdx() {
   apply_ownership
   configure_systemd_service
   log "Starting nginx setup..."
-  configure_nginx
+  if ! configure_nginx; then
+    warn "Nginx setup failed. Review ${NGINX_SITE_FILE} and ${LOG_FILE}."
+    press_enter_to_continue
+    return 1
+  fi
   log "Starting TLS setup..."
-  configure_ssl_if_needed
+  if ! configure_ssl_if_needed; then
+    warn "TLS setup failed. Review ${NGINX_SITE_FILE} and ${LOG_FILE}."
+    press_enter_to_continue
+    return 1
+  fi
 
   log "Installation complete."
   log "BirdX has been installed successfully."
