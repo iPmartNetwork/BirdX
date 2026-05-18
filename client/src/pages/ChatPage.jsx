@@ -44,7 +44,7 @@ import { useNewGroupModal } from "../hooks/chat/useNewGroupModal.js";
 import { usePerfTelemetry } from "../hooks/chat/usePerfTelemetry.js";
 import { useResumeRefresh } from "../hooks/chat/useResumeRefresh.js";
 import { useAppReleaseInfo } from "../hooks/useAppReleaseInfo.js";
-import { Bookmark, Mic, MicOff, Phone, PhoneOff, Volume2 } from "../icons/lucide.js";
+import { Bookmark, Mic, MicOff, Phone, PhoneOff, Video, Volume2 } from "../icons/lucide.js";
 import { CLIPBOARD_COPY_EVENT } from "../utils/clipboard.js";
 import { CACHE_STORES } from "../utils/cacheDb.js";
 import { downloadMessageFiles } from "../utils/fileDownload.js";
@@ -397,8 +397,22 @@ const CALL_STATUS_LABELS = {
   error: "Call failed",
 };
 
+const VIDEO_CALL_STATUS_LABELS = {
+  ...CALL_STATUS_LABELS,
+  preparing: "Preparing camera...",
+  ringing: "Incoming video call",
+};
+
+const CALL_TYPES = new Set(["voice", "video"]);
+
+const normalizeCallType = (callType) => {
+  const normalized = String(callType || "voice").trim().toLowerCase();
+  return CALL_TYPES.has(normalized) ? normalized : "voice";
+};
+
 const CALL_RING_PATTERN = [0, 280, 520, 800, 1500];
 const CALL_RING_LOOP_MS = 2400;
+const CALL_PREVIEW_SWAP_HOLD_MS = 900;
 
 const formatCallDuration = (seconds) => {
   const total = Math.max(0, Number(seconds || 0));
@@ -407,18 +421,25 @@ const formatCallDuration = (seconds) => {
   return `${minutes}:${String(remainingSeconds).padStart(2, "0")}`;
 };
 
-const getCallErrorMessage = (error) => {
+const getCallErrorMessage = (error, callType = "voice") => {
+  const isVideoCall = normalizeCallType(callType) === "video";
   const name = String(error?.name || "");
   if (name === "NotAllowedError" || name === "PermissionDeniedError") {
-    return "Microphone permission was denied.";
+    return isVideoCall
+      ? "Camera or microphone permission was denied."
+      : "Microphone permission was denied.";
   }
   if (name === "NotFoundError" || name === "DevicesNotFoundError") {
-    return "No microphone was found on this device.";
+    return isVideoCall
+      ? "No camera or microphone was found on this device."
+      : "No microphone was found on this device.";
   }
   if (name === "NotReadableError" || name === "TrackStartError") {
-    return "The microphone is already in use by another app.";
+    return isVideoCall
+      ? "The camera or microphone is already in use by another app."
+      : "The microphone is already in use by another app.";
   }
-  return error?.message || "Voice call could not be started.";
+  return error?.message || `${isVideoCall ? "Video" : "Voice"} call could not be started.`;
 };
 
 const buildCallChatUrl = (chatId) => {
@@ -494,6 +515,12 @@ export default function ChatPage({ user, setUser, isDark, setIsDark, toggleTheme
   const [incomingCall, setIncomingCall] = useState(null);
   const [callMuted, setCallMuted] = useState(false);
   const [callDurationSeconds, setCallDurationSeconds] = useState(0);
+  const [callVideoFocus, setCallVideoFocus] = useState("remote");
+  const [callVideoStreamsReady, setCallVideoStreamsReady] = useState({
+    local: false,
+    remote: false,
+  });
+  const [callPreviewPosition, setCallPreviewPosition] = useState(null);
   const updateToastTimerRef = useRef(null);
   const copyToastTimerRef = useRef(null);
   const chatScrollRef = useRef(null);
@@ -530,7 +557,13 @@ export default function ChatPage({ user, setUser, isDark, setIsDark, toggleTheme
   const lazyChunksPreloadedRef = useRef(false);
   const peerRef = useRef(null);
   const localStreamRef = useRef(null);
+  const remoteStreamRef = useRef(null);
   const remoteAudioRef = useRef(null);
+  const primaryCallVideoRef = useRef(null);
+  const previewCallVideoRef = useRef(null);
+  const callVideoStageRef = useRef(null);
+  const callPreviewDragRef = useRef(null);
+  const callPreviewLongPressTimerRef = useRef(null);
   const socketRef = useRef(null);
   const activeChatIdRef = useRef(null);
   const callStateRef = useRef(null);
@@ -654,6 +687,125 @@ export default function ChatPage({ user, setUser, isDark, setIsDark, toggleTheme
     });
   }
 
+  function streamHasLiveVideo(stream) {
+    return Boolean(
+      stream
+        ?.getVideoTracks?.()
+        ?.some((track) => track.readyState === "live"),
+    );
+  }
+
+  function clearCallPreviewLongPress() {
+    if (!callPreviewLongPressTimerRef.current || typeof window === "undefined") return;
+    window.clearTimeout(callPreviewLongPressTimerRef.current);
+    callPreviewLongPressTimerRef.current = null;
+  }
+
+  function clampCallPreviewPosition(nextX, nextY, previewWidth, previewHeight) {
+    const stage = callVideoStageRef.current;
+    const stageRect = stage?.getBoundingClientRect?.();
+    if (!stageRect) return { x: nextX, y: nextY };
+    const margin = 12;
+    const maxX = Math.max(margin, stageRect.width - previewWidth - margin);
+    const maxY = Math.max(margin, stageRect.height - previewHeight - margin);
+    return {
+      x: Math.min(Math.max(nextX, margin), maxX),
+      y: Math.min(Math.max(nextY, margin), maxY),
+    };
+  }
+
+  function toggleCallVideoFocus() {
+    setCallVideoFocus((prev) => (prev === "remote" ? "local" : "remote"));
+  }
+
+  function handleCallPreviewPointerDown(event) {
+    if (!callVideoStageRef.current) return;
+    const previewElement = event.currentTarget;
+    const stageRect = callVideoStageRef.current.getBoundingClientRect();
+    const previewRect = previewElement.getBoundingClientRect();
+    const initialX =
+      typeof callPreviewPosition?.x === "number"
+        ? callPreviewPosition.x
+        : previewRect.left - stageRect.left;
+    const initialY =
+      typeof callPreviewPosition?.y === "number"
+        ? callPreviewPosition.y
+        : previewRect.top - stageRect.top;
+
+    callPreviewDragRef.current = {
+      pointerId: event.pointerId,
+      startClientX: event.clientX,
+      startClientY: event.clientY,
+      startX: initialX,
+      startY: initialY,
+      width: previewRect.width,
+      height: previewRect.height,
+      moved: false,
+      longPressTriggered: false,
+    };
+
+    try {
+      previewElement.setPointerCapture?.(event.pointerId);
+    } catch {
+      // Pointer capture is a nice-to-have for dragging, not a hard requirement.
+    }
+    clearCallPreviewLongPress();
+    if (typeof window !== "undefined") {
+      callPreviewLongPressTimerRef.current = window.setTimeout(() => {
+        const drag = callPreviewDragRef.current;
+        if (!drag || drag.moved) return;
+        drag.longPressTriggered = true;
+        toggleCallVideoFocus();
+      }, CALL_PREVIEW_SWAP_HOLD_MS);
+    }
+  }
+
+  function handleCallPreviewPointerMove(event) {
+    const drag = callPreviewDragRef.current;
+    if (!drag || drag.pointerId !== event.pointerId) return;
+    const dx = event.clientX - drag.startClientX;
+    const dy = event.clientY - drag.startClientY;
+    if (Math.hypot(dx, dy) > 8) {
+      drag.moved = true;
+      clearCallPreviewLongPress();
+    }
+    if (!drag.moved) return;
+    event.preventDefault();
+    setCallPreviewPosition(
+      clampCallPreviewPosition(
+        drag.startX + dx,
+        drag.startY + dy,
+        drag.width,
+        drag.height,
+      ),
+    );
+  }
+
+  function handleCallPreviewPointerEnd(event) {
+    const drag = callPreviewDragRef.current;
+    if (!drag || drag.pointerId !== event.pointerId) return;
+    try {
+      event.currentTarget.releasePointerCapture?.(event.pointerId);
+    } catch {
+      // Pointer capture may already be released by the browser.
+    }
+    clearCallPreviewLongPress();
+    callPreviewDragRef.current = null;
+  }
+
+  function attachCallVideoElement(videoElement, stream) {
+    if (!videoElement) return;
+    if (videoElement.srcObject !== stream) {
+      videoElement.srcObject = stream || null;
+    }
+    videoElement.muted = true;
+    videoElement.playsInline = true;
+    videoElement.setAttribute?.("playsinline", "");
+    if (stream) {
+      videoElement.play?.().catch(() => null);
+    }
+  }
+
   function getRingtoneAudioContext() {
     if (typeof window === "undefined") return null;
     const AudioContextCtor = window.AudioContext || window.webkitAudioContext;
@@ -739,7 +891,8 @@ export default function ChatPage({ user, setUser, isDark, setIsDark, toggleTheme
     if (typeof window === "undefined" || !("Notification" in window)) return;
     if (Notification.permission !== "granted") return;
     const chatId = Number(payload?.chatId || String(payload?.roomId || "").replace(/^chat-/, ""));
-    const title = "Incoming voice call";
+    const isVideoCall = normalizeCallType(payload?.callType) === "video";
+    const title = `Incoming ${isVideoCall ? "video" : "voice"} call`;
     const body = `${payload?.callerName || "Someone"} is calling...`;
     const options = {
       body,
@@ -751,6 +904,7 @@ export default function ChatPage({ user, setUser, isDark, setIsDark, toggleTheme
       data: {
         type: "incoming_call",
         chatId,
+        callType: normalizeCallType(payload?.callType),
         roomId: payload?.roomId || "",
         url: buildCallChatUrl(chatId),
       },
@@ -788,10 +942,26 @@ export default function ChatPage({ user, setUser, isDark, setIsDark, toggleTheme
       try {
         track.stop();
       } catch (error) {
-        console.warn("Failed to stop local audio track:", error);
+        console.warn("Failed to stop local call track:", error);
       }
     });
     localStreamRef.current = null;
+    remoteStreamRef.current = null;
+    setCallVideoStreamsReady({ local: false, remote: false });
+    setCallVideoFocus("remote");
+    setCallPreviewPosition(null);
+    clearCallPreviewLongPress();
+    callPreviewDragRef.current = null;
+
+    [primaryCallVideoRef.current, previewCallVideoRef.current].forEach((video) => {
+      if (!video) return;
+      try {
+        video.pause?.();
+        video.srcObject = null;
+      } catch {
+        // ignore video cleanup failures
+      }
+    });
 
     try {
       peerRef.current?.close?.();
@@ -841,14 +1011,17 @@ export default function ChatPage({ user, setUser, isDark, setIsDark, toggleTheme
     }, delayMs);
   }
 
-  function validateMicrophoneSupport() {
+  function validateMicrophoneSupport(callType = "voice") {
+    const isVideoCall = normalizeCallType(callType) === "video";
     if (typeof navigator === "undefined" || !navigator.mediaDevices?.getUserMedia) {
-      throw new Error("Microphone API is not available in this browser.");
+      throw new Error(
+        `${isVideoCall ? "Camera and microphone APIs are" : "Microphone API is"} not available in this browser.`,
+      );
     }
     if (typeof window !== "undefined") {
       const { hostname, protocol } = window.location;
       if (protocol !== "https:" && !isLoopbackHost(hostname)) {
-        throw new Error("Voice calls require HTTPS or localhost.");
+        throw new Error(`${isVideoCall ? "Video" : "Voice"} calls require HTTPS or localhost.`);
       }
     }
     if (typeof RTCPeerConnection === "undefined") {
@@ -946,15 +1119,23 @@ export default function ChatPage({ user, setUser, isDark, setIsDark, toggleTheme
     await peer.addIceCandidate(new RTCIceCandidate(candidate));
   }
 
-  async function prepareCallPeer(roomId) {
-    validateMicrophoneSupport();
+  async function prepareCallPeer(roomId, callType = "voice") {
+    const normalizedCallType = normalizeCallType(callType || callStateRef.current?.callType);
+    const isVideoCall = normalizedCallType === "video";
+    validateMicrophoneSupport(normalizedCallType);
     ensureRemoteAudioElement();
 
     const existingPeer = peerRef.current;
     const hasLiveAudio = localStreamRef.current
       ?.getAudioTracks?.()
       ?.some((track) => track.readyState === "live");
-    if (existingPeer && existingPeer.connectionState !== "closed" && hasLiveAudio) {
+    const hasLiveVideo = streamHasLiveVideo(localStreamRef.current);
+    if (
+      existingPeer &&
+      existingPeer.connectionState !== "closed" &&
+      hasLiveAudio &&
+      (!isVideoCall || hasLiveVideo)
+    ) {
       return existingPeer;
     }
 
@@ -967,9 +1148,19 @@ export default function ChatPage({ user, setUser, isDark, setIsDark, toggleTheme
         noiseSuppression: true,
         autoGainControl: true,
       },
-      video: false,
+      video: isVideoCall
+        ? {
+            facingMode: "user",
+            width: { ideal: 1280 },
+            height: { ideal: 720 },
+          }
+        : false,
     });
     localStreamRef.current = stream;
+    setCallVideoStreamsReady({
+      local: isVideoCall && streamHasLiveVideo(stream),
+      remote: false,
+    });
     setMicrophonePermission("granted");
     syncLocalAudioMute(callMuted);
 
@@ -995,6 +1186,10 @@ export default function ChatPage({ user, setUser, isDark, setIsDark, toggleTheme
     peer.ontrack = (event) => {
       const [remoteStream] = event.streams || [];
       if (!remoteStream) return;
+      remoteStreamRef.current = remoteStream;
+      if (streamHasLiveVideo(remoteStream)) {
+        setCallVideoStreamsReady((prev) => ({ ...prev, remote: true }));
+      }
       const audio = ensureRemoteAudioElement();
       if (!audio) return;
       audio.muted = false;
@@ -1038,7 +1233,8 @@ export default function ChatPage({ user, setUser, isDark, setIsDark, toggleTheme
     return peer;
   }
 
-  async function startOutgoingCall() {
+  async function startOutgoingCall(callType = "voice") {
+    const normalizedCallType = normalizeCallType(callType);
     const chatId = Number(activeChatIdRef.current || activeChatId || 0);
     if (!chatId || callStateRef.current) return;
 
@@ -1049,6 +1245,7 @@ export default function ChatPage({ user, setUser, isDark, setIsDark, toggleTheme
       roomId,
       chatId,
       isCaller: true,
+      callType: normalizedCallType,
       status: "preparing",
       peerName,
       error: "",
@@ -1064,10 +1261,11 @@ export default function ChatPage({ user, setUser, isDark, setIsDark, toggleTheme
         throw new Error("Call service is not connected yet.");
       }
       joinCallRoom(roomId, socket);
-      await prepareCallPeer(roomId);
+      await prepareCallPeer(roomId, normalizedCallType);
       socket.emit("call-user", {
         roomId,
         chatId,
+        callType: normalizedCallType,
         callerUserId: user?.id || null,
         callerUsername: user?.username || "",
         callerName: user?.nickname || user?.username || "Someone",
@@ -1078,7 +1276,7 @@ export default function ChatPage({ user, setUser, isDark, setIsDark, toggleTheme
       if (String(error?.name || "") === "NotAllowedError") {
         setMicrophonePermission("denied");
       }
-      updateCallStatus("error", { error: getCallErrorMessage(error) });
+      updateCallStatus("error", { error: getCallErrorMessage(error, normalizedCallType) });
       scheduleCallReset(2600);
     }
   }
@@ -1094,6 +1292,7 @@ export default function ChatPage({ user, setUser, isDark, setIsDark, toggleTheme
       roomId,
       chatId: Number(String(roomId).replace(/^chat-/, "")) || null,
       isCaller: false,
+      callType: normalizeCallType(payload?.callType),
       status: "connecting",
       peerName: payload?.callerName || "Caller",
       error: "",
@@ -1107,7 +1306,7 @@ export default function ChatPage({ user, setUser, isDark, setIsDark, toggleTheme
         throw new Error("Call service is not connected yet.");
       }
       joinCallRoom(roomId, socket);
-      await prepareCallPeer(roomId);
+      await prepareCallPeer(roomId, payload?.callType);
       socket.emit("accept-call", { roomId, userId: user?.id || null });
       updateCallStatus("connecting", { startedAt: Date.now() });
       await flushPendingOffer();
@@ -1117,7 +1316,7 @@ export default function ChatPage({ user, setUser, isDark, setIsDark, toggleTheme
         setMicrophonePermission("denied");
       }
       socketRef.current?.emit?.("reject-call", { roomId, userId: user?.id || null });
-      updateCallStatus("error", { error: getCallErrorMessage(error) });
+      updateCallStatus("error", { error: getCallErrorMessage(error, payload?.callType) });
       scheduleCallReset(2600);
     }
   }
@@ -1147,6 +1346,46 @@ export default function ChatPage({ user, setUser, isDark, setIsDark, toggleTheme
   useEffect(() => {
     incomingCallRef.current = incomingCall;
   }, [incomingCall]);
+
+  useEffect(() => {
+    if (normalizeCallType(callState?.callType) !== "video") {
+      attachCallVideoElement(primaryCallVideoRef.current, null);
+      attachCallVideoElement(previewCallVideoRef.current, null);
+      return;
+    }
+    const primaryStream =
+      callVideoFocus === "local" ? localStreamRef.current : remoteStreamRef.current;
+    const previewStream =
+      callVideoFocus === "local" ? remoteStreamRef.current : localStreamRef.current;
+    attachCallVideoElement(primaryCallVideoRef.current, primaryStream);
+    attachCallVideoElement(previewCallVideoRef.current, previewStream);
+  }, [
+    callState?.roomId,
+    callState?.callType,
+    callVideoFocus,
+    callVideoStreamsReady.local,
+    callVideoStreamsReady.remote,
+  ]);
+
+  useEffect(() => {
+    if (!callPreviewPosition || typeof window === "undefined") return undefined;
+    const clampPosition = () => {
+      const previewElement = previewCallVideoRef.current?.parentElement;
+      const previewRect = previewElement?.getBoundingClientRect?.();
+      if (!previewRect) return;
+      setCallPreviewPosition((prev) => {
+        if (!prev) return prev;
+        return clampCallPreviewPosition(
+          prev.x,
+          prev.y,
+          previewRect.width,
+          previewRect.height,
+        );
+      });
+    };
+    window.addEventListener("resize", clampPosition);
+    return () => window.removeEventListener("resize", clampPosition);
+  }, [callPreviewPosition]);
 
   useEffect(() => {
     if (incomingCall) {
@@ -1250,6 +1489,7 @@ export default function ChatPage({ user, setUser, isDark, setIsDark, toggleTheme
       setSyncedIncomingCall({
         ...payload,
         chatId: Number(payload?.chatId || String(payload.roomId).replace(/^chat-/, "")) || null,
+        callType: normalizeCallType(payload?.callType),
         status: "ringing",
       });
     });
@@ -1283,12 +1523,14 @@ export default function ChatPage({ user, setUser, isDark, setIsDark, toggleTheme
       if (!roomId || callStateRef.current?.roomId !== roomId) return;
       if (!callStateRef.current?.isCaller) return;
       try {
-        await prepareCallPeer(roomId);
+        await prepareCallPeer(roomId, callStateRef.current?.callType);
         await createAndSendOffer(roomId);
         updateCallStatus("connecting", { startedAt: Date.now() });
       } catch (error) {
         console.error("Create offer failed:", error);
-        updateCallStatus("error", { error: getCallErrorMessage(error) });
+        updateCallStatus("error", {
+          error: getCallErrorMessage(error, callStateRef.current?.callType),
+        });
         scheduleCallReset(2600);
       }
     });
@@ -1298,7 +1540,9 @@ export default function ChatPage({ user, setUser, isDark, setIsDark, toggleTheme
         await handleIncomingOffer(offer);
       } catch (error) {
         console.error("Offer handling failed:", error);
-        updateCallStatus("error", { error: getCallErrorMessage(error) });
+        updateCallStatus("error", {
+          error: getCallErrorMessage(error, callStateRef.current?.callType),
+        });
         scheduleCallReset(2600);
       }
     });
@@ -1308,7 +1552,9 @@ export default function ChatPage({ user, setUser, isDark, setIsDark, toggleTheme
         await handleIncomingAnswer(answer);
       } catch (error) {
         console.error("Answer handling failed:", error);
-        updateCallStatus("error", { error: getCallErrorMessage(error) });
+        updateCallStatus("error", {
+          error: getCallErrorMessage(error, callStateRef.current?.callType),
+        });
         scheduleCallReset(2600);
       }
     });
@@ -6765,12 +7011,35 @@ const peerStatusLabel = !activeHeaderPeer || activeHeaderPeer?.isDeleted
       !isActiveSavedChat &&
       !activeHeaderAvatar?.isDeleted,
   );
+  const callIsVideo = normalizeCallType(callState?.callType) === "video";
+  const activeCallStatusLabels = callIsVideo
+    ? VIDEO_CALL_STATUS_LABELS
+    : CALL_STATUS_LABELS;
   const callStatusLabel =
-    CALL_STATUS_LABELS[callState?.status] || CALL_STATUS_LABELS.connecting;
+    activeCallStatusLabels[callState?.status] || activeCallStatusLabels.connecting;
   const callPeerName = callState?.peerName || activeFallbackTitle || "Contact";
   const callDurationLabel = formatCallDuration(callDurationSeconds);
   const callIsConnected =
     callState?.status === "connected" || callState?.status === "reconnecting";
+  const primaryCallVideoKind = callVideoFocus === "local" ? "local" : "remote";
+  const previewCallVideoKind = primaryCallVideoKind === "local" ? "remote" : "local";
+  const primaryCallVideoReady =
+    primaryCallVideoKind === "local"
+      ? callVideoStreamsReady.local
+      : callVideoStreamsReady.remote;
+  const previewCallVideoReady =
+    previewCallVideoKind === "local"
+      ? callVideoStreamsReady.local
+      : callVideoStreamsReady.remote;
+  const callPreviewPositionStyle = callPreviewPosition
+    ? {
+        left: `${callPreviewPosition.x}px`,
+        top: `${callPreviewPosition.y}px`,
+      }
+    : {
+        right: "1rem",
+        top: "1rem",
+      };
   const safeNewGroupForm = {
     nickname: String(newGroupForm?.nickname || ""),
     username: String(newGroupForm?.username || ""),
@@ -6908,7 +7177,8 @@ const peerStatusLabel = !activeHeaderPeer || activeHeaderPeer?.isDeleted
         activeFallbackTitle={activeFallbackTitle}
         peerStatusLabel={resolvedHeaderSubtitle}
         typingIndicator={typingIndicator}
-        onStartCall={canStartVoiceCall ? startOutgoingCall : null}
+        onStartCall={canStartVoiceCall ? () => startOutgoingCall("voice") : null}
+        onStartVideoCall={canStartVoiceCall ? () => startOutgoingCall("video") : null}
         isGroupChat={isActiveGroupChat}
         isChannelChat={isActiveChannelChat}
         isSavedChat={isActiveSavedChat}
@@ -7265,77 +7535,212 @@ const peerStatusLabel = !activeHeaderPeer || activeHeaderPeer?.isDeleted
 ) : null}
 
 {callState ? (
-  <div className="fixed inset-0 z-[300] flex items-center justify-center bg-slate-950/75 px-4 py-6 backdrop-blur-sm">
-    <div className="w-full max-w-sm overflow-hidden rounded-[2rem] border border-white/10 bg-white shadow-2xl dark:bg-slate-950">
-      <div className="relative px-6 pb-6 pt-7 text-center text-slate-900 dark:text-white">
-        <div className="absolute inset-x-0 top-0 h-28 bg-emerald-500/15 dark:bg-emerald-400/10" />
-        <div className="relative mx-auto flex h-20 w-20 items-center justify-center rounded-full border border-emerald-200 bg-emerald-50 text-2xl font-bold text-emerald-700 shadow-lg shadow-emerald-500/20 dark:border-emerald-500/30 dark:bg-emerald-500/15 dark:text-emerald-100">
-          {getAvatarInitials(callPeerName || "C")}
+  callIsVideo ? (
+    <div className="fixed inset-0 z-[300] bg-slate-950 text-white">
+      <div
+        ref={callVideoStageRef}
+        className="relative h-full w-full overflow-hidden bg-slate-950"
+      >
+        <video
+          ref={primaryCallVideoRef}
+          autoPlay
+          playsInline
+          muted
+          className={`absolute inset-0 h-full w-full bg-slate-950 object-cover transition-opacity duration-200 ${
+            primaryCallVideoReady ? "opacity-100" : "opacity-0"
+          }`}
+          style={primaryCallVideoKind === "local" ? { transform: "scaleX(-1)" } : undefined}
+        />
+        {!primaryCallVideoReady ? (
+          <div className="absolute inset-0 flex flex-col items-center justify-center bg-slate-950 text-center">
+            <div className="flex h-24 w-24 items-center justify-center rounded-full border border-emerald-400/30 bg-emerald-500/15 text-3xl font-bold text-emerald-100 shadow-2xl shadow-emerald-500/20">
+              {primaryCallVideoKind === "local" ? (
+                <Video size={34} strokeWidth={2.2} />
+              ) : (
+                getAvatarInitials(callPeerName || "C")
+              )}
+            </div>
+            <p className="mt-4 text-sm font-semibold text-slate-200">
+              {primaryCallVideoKind === "local" ? "Camera starting..." : "Waiting for video..."}
+            </p>
+          </div>
+        ) : null}
+
+        <div className="pointer-events-none absolute inset-x-0 top-0 z-20 bg-gradient-to-b from-black/70 via-black/25 to-transparent px-4 pb-10 pt-4">
+          <h2 className="max-w-[70vw] truncate text-lg font-bold" title={callPeerName}>
+            {callPeerName}
+          </h2>
+          <div className="mt-1 flex items-center gap-2 text-xs font-semibold text-slate-200">
+            <span
+              className={`h-2.5 w-2.5 rounded-full ${
+                callState.status === "connected"
+                  ? "bg-emerald-400"
+                  : callState.status === "error" || callState.status === "ended"
+                    ? "bg-rose-400"
+                    : "animate-pulse bg-amber-300"
+              }`}
+            />
+            <span>{callStatusLabel}</span>
+            {callIsConnected ? <span>{callDurationLabel}</span> : null}
+          </div>
         </div>
-        <h2 className="relative mt-4 truncate text-xl font-bold" title={callPeerName}>
-          {callPeerName}
-        </h2>
-        <div className="relative mt-2 flex items-center justify-center gap-2 text-sm text-slate-500 dark:text-slate-400">
-          <span
-            className={`h-2.5 w-2.5 rounded-full ${
-              callState.status === "connected"
-                ? "bg-emerald-500"
-                : callState.status === "error" || callState.status === "ended"
-                  ? "bg-rose-500"
-                  : "animate-pulse bg-amber-400"
+
+        <div
+          role="button"
+          tabIndex={0}
+          aria-label="Video preview"
+          title="Preview"
+          onPointerDown={handleCallPreviewPointerDown}
+          onPointerMove={handleCallPreviewPointerMove}
+          onPointerUp={handleCallPreviewPointerEnd}
+          onPointerCancel={handleCallPreviewPointerEnd}
+          onDoubleClick={toggleCallVideoFocus}
+          onKeyDown={(event) => {
+            if (event.key === "Enter" || event.key === " ") {
+              event.preventDefault();
+              toggleCallVideoFocus();
+            }
+          }}
+          className="absolute z-30 h-36 w-24 cursor-grab overflow-hidden rounded-2xl border border-white/30 bg-slate-900 shadow-2xl shadow-black/40 outline-none ring-0 transition-transform active:cursor-grabbing active:scale-[0.98] focus-visible:ring-2 focus-visible:ring-emerald-300 sm:h-44 sm:w-32"
+          style={{ ...callPreviewPositionStyle, touchAction: "none" }}
+        >
+          <video
+            ref={previewCallVideoRef}
+            autoPlay
+            playsInline
+            muted
+            className={`h-full w-full bg-slate-900 object-cover transition-opacity duration-200 ${
+              previewCallVideoReady ? "opacity-100" : "opacity-0"
             }`}
+            style={previewCallVideoKind === "local" ? { transform: "scaleX(-1)" } : undefined}
           />
-          <span>{callStatusLabel}</span>
-          {callIsConnected ? <span>{callDurationLabel}</span> : null}
+          {!previewCallVideoReady ? (
+            <div className="absolute inset-0 flex items-center justify-center bg-slate-900 text-sm font-bold text-slate-200">
+              {previewCallVideoKind === "local" ? (
+                <Video size={22} strokeWidth={2.2} />
+              ) : (
+                getAvatarInitials(callPeerName || "C")
+              )}
+            </div>
+          ) : null}
+          <span className="pointer-events-none absolute inset-x-2 bottom-2 truncate rounded-full bg-black/50 px-2 py-1 text-center text-[10px] font-semibold text-white backdrop-blur">
+            {previewCallVideoKind === "local" ? "You" : callPeerName}
+          </span>
         </div>
+
         {callState.error ? (
-          <p className="relative mt-4 rounded-2xl border border-amber-200 bg-amber-50 px-3 py-2 text-xs font-semibold text-amber-700 dark:border-amber-500/30 dark:bg-amber-500/10 dark:text-amber-100">
+          <p className="absolute left-4 right-4 top-24 z-20 rounded-2xl border border-amber-200/60 bg-amber-50/95 px-3 py-2 text-center text-xs font-semibold text-amber-800 shadow-lg dark:border-amber-500/30 dark:bg-amber-500/15 dark:text-amber-100">
             {callState.error}
           </p>
         ) : null}
-      </div>
 
-      <div className="grid grid-cols-3 gap-3 border-y border-slate-200 bg-slate-50 px-5 py-4 dark:border-white/10 dark:bg-slate-900/80">
-        <button
-          type="button"
-          onClick={toggleCallMute}
-          className={`flex h-14 flex-col items-center justify-center gap-1 rounded-2xl border text-xs font-semibold transition ${
-            callMuted
-              ? "border-amber-300 bg-amber-100 text-amber-700 dark:border-amber-500/40 dark:bg-amber-500/15 dark:text-amber-100"
-              : "border-slate-200 bg-white text-slate-700 hover:border-emerald-300 hover:text-emerald-700 dark:border-white/10 dark:bg-slate-950 dark:text-slate-200 dark:hover:border-emerald-500/40 dark:hover:text-emerald-100"
-          }`}
-        >
-          {callMuted ? <MicOff size={18} /> : <Mic size={18} />}
-          {callMuted ? "Muted" : "Mic"}
-        </button>
-        <button
-          type="button"
-          onClick={() => remoteAudioRef.current?.play?.().catch(() => null)}
-          className="flex h-14 flex-col items-center justify-center gap-1 rounded-2xl border border-slate-200 bg-white text-xs font-semibold text-slate-700 transition hover:border-emerald-300 hover:text-emerald-700 dark:border-white/10 dark:bg-slate-950 dark:text-slate-200 dark:hover:border-emerald-500/40 dark:hover:text-emerald-100"
-        >
-          <Volume2 size={18} />
-          Audio
-        </button>
-        <button
-          type="button"
-          onClick={endActiveCall}
-          className="flex h-14 flex-col items-center justify-center gap-1 rounded-2xl border border-rose-300 bg-rose-500 text-xs font-semibold text-white shadow-lg shadow-rose-500/25 transition hover:bg-rose-600"
-        >
-          <PhoneOff size={18} />
-          End
-        </button>
-      </div>
-
-      <div className="px-6 py-4 text-center text-xs font-medium text-slate-500 dark:text-slate-400">
-        {CALL_ICE_SERVERS.some((server) => String([].concat(server.urls || []).join(" ")).includes("turn:"))
-          ? "Relay ready for strict mobile networks"
-          : "Add a TURN server for the most reliable mobile audio"}
-        <span className="mt-1 block">
-          Keep this screen open during calls; BirdX will try to keep the display awake.
-        </span>
+        <div className="absolute inset-x-0 bottom-0 z-20 bg-gradient-to-t from-black/80 via-black/30 to-transparent px-5 pb-[calc(env(safe-area-inset-bottom)+1.25rem)] pt-14">
+          <div className="mx-auto grid max-w-sm grid-cols-3 gap-3">
+            <button
+              type="button"
+              onClick={toggleCallMute}
+              className={`flex h-14 flex-col items-center justify-center gap-1 rounded-2xl border text-xs font-semibold transition ${
+                callMuted
+                  ? "border-amber-300/70 bg-amber-400/20 text-amber-100"
+                  : "border-white/20 bg-white/10 text-white hover:border-emerald-300/70 hover:bg-emerald-400/20"
+              }`}
+            >
+              {callMuted ? <MicOff size={18} /> : <Mic size={18} />}
+              {callMuted ? "Muted" : "Mic"}
+            </button>
+            <button
+              type="button"
+              onClick={() => remoteAudioRef.current?.play?.().catch(() => null)}
+              className="flex h-14 flex-col items-center justify-center gap-1 rounded-2xl border border-white/20 bg-white/10 text-xs font-semibold text-white transition hover:border-emerald-300/70 hover:bg-emerald-400/20"
+            >
+              <Volume2 size={18} />
+              Audio
+            </button>
+            <button
+              type="button"
+              onClick={endActiveCall}
+              className="flex h-14 flex-col items-center justify-center gap-1 rounded-2xl border border-rose-300/80 bg-rose-500 text-xs font-semibold text-white shadow-lg shadow-rose-500/25 transition hover:bg-rose-600"
+            >
+              <PhoneOff size={18} />
+              End
+            </button>
+          </div>
+        </div>
       </div>
     </div>
-  </div>
+  ) : (
+    <div className="fixed inset-0 z-[300] flex items-center justify-center bg-slate-950/75 px-4 py-6 backdrop-blur-sm">
+      <div className="w-full max-w-sm overflow-hidden rounded-[2rem] border border-white/10 bg-white shadow-2xl dark:bg-slate-950">
+        <div className="relative px-6 pb-6 pt-7 text-center text-slate-900 dark:text-white">
+          <div className="absolute inset-x-0 top-0 h-28 bg-emerald-500/15 dark:bg-emerald-400/10" />
+          <div className="relative mx-auto flex h-20 w-20 items-center justify-center rounded-full border border-emerald-200 bg-emerald-50 text-2xl font-bold text-emerald-700 shadow-lg shadow-emerald-500/20 dark:border-emerald-500/30 dark:bg-emerald-500/15 dark:text-emerald-100">
+            {getAvatarInitials(callPeerName || "C")}
+          </div>
+          <h2 className="relative mt-4 truncate text-xl font-bold" title={callPeerName}>
+            {callPeerName}
+          </h2>
+          <div className="relative mt-2 flex items-center justify-center gap-2 text-sm text-slate-500 dark:text-slate-400">
+            <span
+              className={`h-2.5 w-2.5 rounded-full ${
+                callState.status === "connected"
+                  ? "bg-emerald-500"
+                  : callState.status === "error" || callState.status === "ended"
+                    ? "bg-rose-500"
+                    : "animate-pulse bg-amber-400"
+              }`}
+            />
+            <span>{callStatusLabel}</span>
+            {callIsConnected ? <span>{callDurationLabel}</span> : null}
+          </div>
+          {callState.error ? (
+            <p className="relative mt-4 rounded-2xl border border-amber-200 bg-amber-50 px-3 py-2 text-xs font-semibold text-amber-700 dark:border-amber-500/30 dark:bg-amber-500/10 dark:text-amber-100">
+              {callState.error}
+            </p>
+          ) : null}
+        </div>
+
+        <div className="grid grid-cols-3 gap-3 border-y border-slate-200 bg-slate-50 px-5 py-4 dark:border-white/10 dark:bg-slate-900/80">
+          <button
+            type="button"
+            onClick={toggleCallMute}
+            className={`flex h-14 flex-col items-center justify-center gap-1 rounded-2xl border text-xs font-semibold transition ${
+              callMuted
+                ? "border-amber-300 bg-amber-100 text-amber-700 dark:border-amber-500/40 dark:bg-amber-500/15 dark:text-amber-100"
+                : "border-slate-200 bg-white text-slate-700 hover:border-emerald-300 hover:text-emerald-700 dark:border-white/10 dark:bg-slate-950 dark:text-slate-200 dark:hover:border-emerald-500/40 dark:hover:text-emerald-100"
+            }`}
+          >
+            {callMuted ? <MicOff size={18} /> : <Mic size={18} />}
+            {callMuted ? "Muted" : "Mic"}
+          </button>
+          <button
+            type="button"
+            onClick={() => remoteAudioRef.current?.play?.().catch(() => null)}
+            className="flex h-14 flex-col items-center justify-center gap-1 rounded-2xl border border-slate-200 bg-white text-xs font-semibold text-slate-700 transition hover:border-emerald-300 hover:text-emerald-700 dark:border-white/10 dark:bg-slate-950 dark:text-slate-200 dark:hover:border-emerald-500/40 dark:hover:text-emerald-100"
+          >
+            <Volume2 size={18} />
+            Audio
+          </button>
+          <button
+            type="button"
+            onClick={endActiveCall}
+            className="flex h-14 flex-col items-center justify-center gap-1 rounded-2xl border border-rose-300 bg-rose-500 text-xs font-semibold text-white shadow-lg shadow-rose-500/25 transition hover:bg-rose-600"
+          >
+            <PhoneOff size={18} />
+            End
+          </button>
+        </div>
+
+        <div className="px-6 py-4 text-center text-xs font-medium text-slate-500 dark:text-slate-400">
+          {CALL_ICE_SERVERS.some((server) => String([].concat(server.urls || []).join(" ")).includes("turn:"))
+            ? "Relay ready for strict mobile networks"
+            : "Add a TURN server for the most reliable mobile audio"}
+          <span className="mt-1 block">
+            Keep this screen open during calls; BirdX will try to keep the display awake.
+          </span>
+        </div>
+      </div>
+    </div>
+  )
 ) : null}
 
 {incomingCall ? (
@@ -7346,7 +7751,7 @@ const peerStatusLabel = !activeHeaderPeer || activeHeaderPeer?.isDeleted
       </div>
 
       <h2 className="mt-4 text-xl font-bold text-slate-900 dark:text-white">
-        Incoming Call
+        Incoming {normalizeCallType(incomingCall.callType) === "video" ? "Video" : "Voice"} Call
       </h2>
 
       <p className="mt-2 text-sm text-slate-500 dark:text-slate-400">
@@ -7368,7 +7773,11 @@ const peerStatusLabel = !activeHeaderPeer || activeHeaderPeer?.isDeleted
           onClick={acceptIncomingCall}
           className="inline-flex items-center justify-center gap-2 rounded-2xl bg-emerald-500 px-4 py-3 text-sm font-semibold text-white shadow-lg shadow-emerald-500/25 transition hover:bg-emerald-600"
         >
-          <Phone size={17} strokeWidth={2.4} />
+          {normalizeCallType(incomingCall.callType) === "video" ? (
+            <Video size={17} strokeWidth={2.4} />
+          ) : (
+            <Phone size={17} strokeWidth={2.4} />
+          )}
           Accept
         </button>
       </div>
