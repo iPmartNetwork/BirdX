@@ -2,12 +2,14 @@ import {
   Bell,
   Bookmark,
   Database,
+  Globe,
   Info,
   LogOut,
   Rocket,
   ShieldCheck,
   User,
 } from "../../../icons/lucide.js";
+import { useLanguage } from "../../../i18n/LanguageContext.jsx";
 import { ThemeButton } from "../common/ThemeButton.jsx";
 
 export function SettingsMenuActions({
@@ -27,6 +29,7 @@ export function SettingsMenuActions({
   showAdminPanel = false,
   onOpenWhatsNew,
 }) {
+  const { t } = useLanguage();
   const isMobile = variant === "mobile";
   const buttonBase = isMobile
     ? "flex w-full items-center gap-3 rounded-xl border border-transparent px-3 py-3 text-left text-base font-medium"
@@ -42,7 +45,7 @@ export function SettingsMenuActions({
         className={`${buttonBase} ${accentHover}`}
       >
         <User size={18} className="icon-anim-sway" />
-        Edit profile
+        {t("settings.profile")}
       </button>
       <button
         type="button"
@@ -50,7 +53,7 @@ export function SettingsMenuActions({
         className={`mt-1 ${buttonBase} ${accentHover}`}
       >
         <ShieldCheck size={18} className="icon-anim-sway" />
-        Security
+        {t("settings.security")}
       </button>
       <button
         type="button"
@@ -58,7 +61,15 @@ export function SettingsMenuActions({
         className={`mt-1 ${buttonBase} ${accentHover}`}
       >
         <Database size={18} className="icon-anim-sway" />
-        Data
+        {t("settings.data")}
+      </button>
+      <button
+        type="button"
+        onClick={() => setSettingsPanel("language")}
+        className={`mt-1 ${buttonBase} ${accentHover}`}
+      >
+        <Globe size={18} className="icon-anim-sway" />
+        {t("settings.language")}
       </button>
       <button
         type="button"
@@ -66,7 +77,7 @@ export function SettingsMenuActions({
         className={`mt-1 ${buttonBase} ${accentHover}`}
       >
         <Bookmark size={18} className="icon-anim-sway" />
-        Saved messages
+        {t("settings.savedMessages")}
       </button>
       <button
         type="button"
@@ -74,7 +85,7 @@ export function SettingsMenuActions({
         className={`mt-1 ${buttonBase} ${accentHover}`}
       >
         <Bell size={18} className="icon-anim-sway" />
-        Notifications
+        {t("settings.notifications")}
       </button>
       {showAdminPanel ? (
         <button
@@ -83,7 +94,7 @@ export function SettingsMenuActions({
           className={`mt-1 ${buttonBase} ${accentHover}`}
         >
           <ShieldCheck size={18} className="icon-anim-sway" />
-          Admin panel
+          {t("settings.adminPanel")}
         </button>
       ) : null}
       <ThemeButton
@@ -98,7 +109,7 @@ export function SettingsMenuActions({
         className={`mt-1 ${buttonBase} ${accentHover}`}
       >
         <Rocket size={18} className="icon-anim-sway" />
-        What's new
+        {t("settings.whatsNew")}
       </button>
       <button
         type="button"
@@ -106,7 +117,7 @@ export function SettingsMenuActions({
         className={`mt-1 ${buttonBase} ${accentHover}`}
       >
         <Info size={18} className="icon-anim-sway" />
-        About
+        {t("settings.about")}
       </button>
       <button
         type="button"
@@ -114,7 +125,7 @@ export function SettingsMenuActions({
         className={`mt-2 ${buttonBase} text-rose-600 transition hover:border-rose-300 hover:bg-rose-100 hover:shadow-[0_0_18px_rgba(244,63,94,0.18)] dark:text-rose-300 dark:hover:border-rose-500/30 dark:hover:bg-rose-500/10`}
       >
         <LogOut size={18} className="icon-anim-slide" />
-        Log out
+        {t("settings.logout")}
       </button>
     </>
   );
