@@ -20,7 +20,6 @@ import {
   x3dhRespond,
   encryptMessage,
   decryptMessage,
-  ratchetKey,
   E2EE_MESSAGE_PREFIX,
   isE2eeMessage,
   wrapE2eeMessage,
