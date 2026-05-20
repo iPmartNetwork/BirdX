@@ -16,7 +16,7 @@ https://github.com/bllackbull/Songbird
 
 ## Current Release
 
-`2.5.3-rc1`
+`2.5.3-rc2`
 
 This release fixes critical security and stability bugs, improves real-time reaction updates, and adds a draggable minimized call card.
 
