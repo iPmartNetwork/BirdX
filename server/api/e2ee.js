@@ -16,8 +16,6 @@ function registerE2eeRoutes(app, deps) {
     requireSessionUsernameMatch,
     findUserByUsername,
     findUserById,
-    isMember,
-    findDmChat,
   } = deps;
 
   /**
